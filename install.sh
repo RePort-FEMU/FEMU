@@ -68,8 +68,8 @@ else
     print_msg info "Creating a new PostgreSQL container..."
     docker run -d \
         --name firmainc-postgres \
-        -e POSTGRES_PASSWORD=firmadyne \
-        -e POSTGRES_USER=firmadyne \
+        -e POSTGRES_PASSWORD=femu \
+        -e POSTGRES_USER=femu \
         -e POSTGRES_DB=firmware \
         -e PGDATA=/var/lib/postgresql/data/pgdata \
         -v $REPO_ROOT/database:/var/lib/postgresql/data \
