@@ -66,6 +66,16 @@ if docker ps -a --format '{{.Names}}' | grep -Eq "^firmainc-postgres\$"; then
     fi
 else
     print_msg info "Creating a new PostgreSQL container..."
+
+    if [ ! -d "$REPO_ROOT/database" ]; then
+        print_msg info "Creating database directory at $REPO_ROOT/database"
+        mkdir -p "$REPO_ROOT/database"
+        if [ $? -ne 0 ]; then
+            print_msg fail "Failed to create database directory."
+            exit 1
+        fi
+    fi
+
     docker run -d \
         --name firmainc-postgres \
         -e POSTGRES_PASSWORD=femu \
