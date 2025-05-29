@@ -57,9 +57,9 @@ fi
 print_msg success "Docker is accessible."
 
 # Check if the container already exists
-if docker ps -a --format '{{.Names}}' | grep -Eq "^firmainc-postgres\$"; then
-    print_msg info "Container 'firmainc-postgres' already exists. Restarting it..."
-    docker start firmainc-postgres &> /dev/null
+if docker ps -a --format '{{.Names}}' | grep -Eq "^femu-postgres\$"; then
+    print_msg info "Container 'femu-postgres' already exists. Restarting it..."
+    docker start femu-postgres &> /dev/null
     if [ $? -ne 0 ]; then
         print_msg fail "Failed to restart the existing container."
         exit 1
@@ -77,7 +77,7 @@ else
     fi
 
     docker run -d \
-        --name firmainc-postgres \
+        --name femu-postgres \
         -e POSTGRES_PASSWORD=femu \
         -e POSTGRES_USER=femu \
         -e POSTGRES_DB=firmware \
@@ -98,7 +98,7 @@ done
 
 print_msg success "PostgreSQL started successfully."
 
-if docker exec -i femu-postgres psql -U femu -d firmware -c "\dt" | grep -q "image"; then
+if docker exec -i femu-postgres psql -U femu -d firmware -c "\dt" 2>&1 | grep -q "image"; then
     print_msg info "Database schema already applied. Skipping schema application."
 else
     print_msg info "Applying database schema..."
@@ -127,29 +127,23 @@ else
     print_msg success "Python virtual environment created successfully."
 fi
 
-# Install binwalk
-print_msg info "Installing Binwalk..."
-source "$REPO_ROOT/.venv/bin/activate"
-wget -q https://github.com/George-RG/binwalk/archive/refs/tags/v2.3.5.tar.gz -O binwalk.tar.gz
-if [ $? -ne 0 ]; then
-    print_msg fail "Failed to download Binwalk."
+# Install the extractor package
+if [ -d "$REPO_ROOT/src/extractor" ]; then
+    print_msg info "Installing extractor package..."
+    source "$REPO_ROOT/.venv/bin/activate"
+    cd "$REPO_ROOT/src/extractor" || exit 1
+
+    ./install.sh
+    if [ $? -ne 0 ]; then
+        print_msg fail "Failed to install extractor package."
+        deactivate
+        exit 1
+    fi
+    deactivate
+else
+    print_msg fail "Extractor package directory not found: $REPO_ROOT/src/extractor"
     exit 1
 fi
-tar -xzf binwalk.tar.gz
-rm binwalk.tar.gz
-cd "$REPO_ROOT/binwalk-2.3.5" || exit
-./deps.sh --yes &> /dev/null
-pip install . &> /dev/null
-cd - &> /dev/null
-rm -rf "$REPO_ROOT/binwalk-2.3.5"
-deactivate
-
-if [ $? -ne 0 ]; then
-    print_msg fail "Failed to install Binwalk."
-    exit 1
-fi
-
-print_msg success "Binwalk installed successfully"
 
 # Activate the virtual environment and install requirements
 if [ -f "$REPO_ROOT/requirements.txt" ]; then
@@ -166,18 +160,3 @@ if [ -f "$REPO_ROOT/requirements.txt" ]; then
 else
     print_msg warning "No requirements.txt found. Skipping dependency installation."
 fi
-
-if [ -d "$REPO_ROOT/analyses/routersploit" ]; then
-    if [ "$(ls -A "$REPO_ROOT/analyses/routersploit")" ]; then
-        source "$REPO_ROOT/.venv/bin/activate"
-        pip install -r "$REPO_ROOT/analyses/routersploit/requirements.txt" &> /dev/null
-        deactivate
-        cd "$REPO_ROOT/analyses/routersploit" && patch -p1 < ../routersploit_patch && cd "$REPO_ROOT" &> /dev/null
-        print_msg info "Routersploit configured successfully."
-    else
-        print_msg warning "Routersploit was not found. Skipping (this may affect analyses)."
-    fi
-else
-    print_msg warning "Routersploit was not found. Skipping (this may affect analyses)."
-fi
-
