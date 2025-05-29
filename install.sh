@@ -92,17 +92,17 @@ else
 fi
 
 # Wait for the container to start
-while ! docker exec firmainc-postgres pg_isready -U firmadyne &> /dev/null; do
+while ! docker exec femu-postgres pg_isready -U femu &> /dev/null; do
     sleep 1
 done
 
 print_msg success "PostgreSQL started successfully."
 
-if docker exec -i firmainc-postgres psql -U firmadyne -d firmware -c "\dt" | grep -q "image"; then
+if docker exec -i femu-postgres psql -U femu -d firmware -c "\dt" | grep -q "image"; then
     print_msg info "Database schema already applied. Skipping schema application."
 else
     print_msg info "Applying database schema..."
-    docker exec -i firmainc-postgres psql -U firmadyne -d firmware < "$REPO_ROOT/database/schema" &> /dev/null
+    docker exec -i femu-postgres psql -U femu -d firmware < "$REPO_ROOT/database/schema" &> /dev/null
     if [ $? -ne 0 ]; then
         print_msg fail "Could not populate database"
         exit 1
