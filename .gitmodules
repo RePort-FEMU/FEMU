@@ -1,0 +1,4 @@
+[submodule "src/extractor"]
+	path = src/extractor
+	url = git@github.com:RePort-FEMU/extractor.git
+    ignore = all
