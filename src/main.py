@@ -4,6 +4,7 @@ import argparse
 
 from common import RunningMode
 from dbInterface import checkConnection
+from emulator import Emulator
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -46,6 +47,23 @@ def main():
     args = parseArguments()
     checkArguments(args)
     
+    if os.path.isdir(args.input):
+        inputFiles = [os.path.join(args.input, f) for f in os.listdir(args.input) if os.path.isfile(os.path.join(args.input, f))]
+    else:
+        inputFiles = [args.input]
+        
+    for inputFile in inputFiles:
+        em = Emulator(
+            mode=RunningMode(args.mode),
+            inputPath=inputFile,
+            outputPath=args.output,
+            brand=args.brand,
+            dbIP=args.sql,
+            dbPort=args.port
+        )
+        logging.info(f"Initialized emulator for {inputFile} in mode {args.mode} with brand {args.brand}.")
+        
+        em.run()
     
     
 
