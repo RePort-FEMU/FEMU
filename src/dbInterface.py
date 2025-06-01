@@ -3,6 +3,8 @@ import logging
 
 from typing import Optional
 
+logger = logging.getLogger("emulator")
+
 def checkConnection(host:str, port:int) -> bool:
     conn = None
     ret = True
@@ -15,7 +17,7 @@ def checkConnection(host:str, port:int) -> bool:
             port=port
         )
     except Exception as e:
-        logging.error(f"Error connecting to PostgreSQL database: {e}")
+        logger.error(f"Error connecting to PostgreSQL database: {e}")
         ret = False
     
     finally:
@@ -43,7 +45,7 @@ class DBInterface:
             self.cursor = self.conn.cursor()
             return self.cursor
         except Exception as e:
-            logging.error(f"Error connecting to PostgreSQL database: {e}")
+            logger.error(f"Error connecting to PostgreSQL database: {e}")
             raise e
 
     def __enter__(self):

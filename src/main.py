@@ -6,7 +6,7 @@ from common import RunningMode
 from dbInterface import checkConnection
 from emulator import Emulator
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def parseArguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FEMU: A tool for emulating and analyzing firmware.")
