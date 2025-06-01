@@ -178,3 +178,4 @@ cython_debug/
 **/firmware/
 **/firmwares
 **/images/
+**/output/

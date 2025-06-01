@@ -49,9 +49,9 @@ def checkArch(tarballPath: str, tempDirID: str) -> tuple[Architecture, Endianess
     for member in tar.getmembers():
         if member.isfile():
             if any([member.name.find(binary) != -1 for binary in ["/busybox", "/alphapd", "/boa", "/http", "/hydra", "/helia", "/webs"]]):
-                executables.append(member.name)
+                executables.append(member)
             elif any([member.name.find(path) != -1 for path in ["/sbin/", "/bin/"]]):
-                executables.append(member.name)
+                executables.append(member)
     
     try:
         os.mkdir(os.path.join("/tmp", tempDirID))

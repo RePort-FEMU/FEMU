@@ -8,8 +8,8 @@ def checkConnection(host:str, port:int) -> bool:
     ret = True
     try:
         conn = psycopg2.connect(
-            dbname="FEMU",
-            username="femu",
+            dbname="firmware",
+            user="femu",
             password="femu",
             host=host,
             port=port
@@ -34,7 +34,7 @@ class DBInterface:
     def connect(self) -> Optional[psycopg2.extensions.cursor]:
         try:
             self.conn = psycopg2.connect(
-                dbname="FEMU",
+                dbname="firmware",
                 user="femu",
                 password="femu",
                 host=self.host,
