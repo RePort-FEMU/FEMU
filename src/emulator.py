@@ -5,7 +5,7 @@ import sys
 
 from common import RunningMode, Architecture, Endianess
 from dbInterface import DBInterface
-from util import io_md5, checkArch, strings, checkCompatibility
+from util import io_md5, checkArch, strings, checkCompatibility, getFilesInfo, getLinksInfo, getObjectIds, insertObjectsToImage, insertLinksToImage
 
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'extractor'))
@@ -33,23 +33,11 @@ class Emulator:
         self.brand = brand
         self.dbIP = dbIP
         self.dbPort = dbPort
+        self.hash = io_md5(self.inputPath)
         
-        if not os.path.exists(self.imagePath):
-            try:
-                os.makedirs(self.imagePath)
-                logger.info(f"Image directory created at: {self.imagePath}")
-            except Exception as e:
-                logger.error(f"Failed to create image directory: {e}")
-                raise
-            
-        if not os.path.exists(self.scratchPath):
-            try:
-                os.makedirs(self.scratchPath)
-                logger.info(f"Scratch directory created at: {self.scratchPath}")
-            except Exception as e:
-                logger.error(f"Failed to create scratch directory: {e}")
-                raise
-
+        # Create directories for images and scratch space
+        self.createDirectories()
+        
         if brand == "auto":
             if dbIP:
                 self.brand = self.detectBrand()
@@ -69,6 +57,24 @@ class Emulator:
         self.kernelVersionString = ""
         self.kernelInit = ""
         self.kernelInitString = ""
+          
+    def createDirectories(self):
+        # Create necessary directories for images and scratch space
+        if not os.path.exists(self.imagePath):
+            try:
+                os.makedirs(self.imagePath)
+                logger.info(f"Image directory created at: {self.imagePath}")
+            except Exception as e:
+                logger.error(f"Failed to create image directory: {e}")
+                raise
+            
+        if not os.path.exists(self.scratchPath):
+            try:
+                os.makedirs(self.scratchPath)
+                logger.info(f"Scratch directory created at: {self.scratchPath}")
+            except Exception as e:
+                logger.error(f"Failed to create scratch directory: {e}")
+                raise
             
     def detectBrand(self):
         # Check if the firmware's hash is in the database
@@ -212,6 +218,29 @@ class Emulator:
             logger.warning("Failed to infer kernel version.")
 
         return True
+    
+    def dumpObjectsToDB(self):
+        if not self.dbIP:
+            logger.warning("No database IP provided, skipping database updates.")
+            return True
+        
+        if not self.iid:
+            logger.error("Image ID is not set. Cannot dump objects to database.")
+            return False
+        
+        if not self.filesystemPath:
+            logger.error("Filesystem path is not set. Cannot dump objects to database.")
+            return False
+        
+        logger.info("Dumping objects to database.")
+        
+        fileInfo = getFilesInfo(self.filesystemPath)
+        objectsIds, _ = getObjectIds(fileInfo, self.dbIP, self.dbPort)
+        
+        insertObjectsToImage(self.iid, objectsIds, fileInfo, self.dbIP, self.dbPort)
+        
+        linkInfo = getLinksInfo(self.filesystemPath)
+        insertLinksToImage(self.iid, linkInfo, self.dbIP, self.dbPort)
 
     def run(self):
         logger.info(f"Running emulator for firmware: {self.inputPath}")
@@ -227,6 +256,12 @@ class Emulator:
         if not checkCompatibility(self.architecture, self.endianess):
             logger.error(f"Incompatible architecture or endianess: {self.architecture}, {self.endianess}")
             return
+        
+        if not self.dumpObjectsToDB():
+            logger.error("Failed to dump objects to database.")
+            return
+        
+        
         
         
 
