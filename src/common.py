@@ -40,3 +40,7 @@ class Endianess(Enum):
     
     def identifier(self):
         return self.value[0]
+    
+GIGA = 1024 * 1024 * 1024
+MEGA = 1024 * 1024
+KILO = 1024

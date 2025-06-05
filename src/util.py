@@ -355,3 +355,95 @@ def insertLinksToImage(imageId: str, links: list[tuple[str, str]], dbIp: str, db
             })
         
         cursor.connection.commit()
+        
+def dd(inputFile: str, outputFile: str, count: int , blockSize: int = 512) -> None:
+    """
+    Copies data from inputFile to outputFile using dd-like functionality.
+
+    Args:
+        inputFile (str): Path to the input file.
+        outputFile (str): Path to the output file.
+        count (int): Number of blocks to copy.
+        blockSize (int): Size of each block in bytes. Default is 512 bytes.
+
+    Raises:
+        RuntimeError: If the copy operation fails.
+    """
+    if not os.path.exists(inputFile):
+        raise FileNotFoundError(f"Input file {inputFile} does not exist or is not a file.")
+
+    if not os.access(inputFile, os.R_OK):
+        raise PermissionError(f"Input file {inputFile} is not readable.")
+
+    output_dir = os.path.dirname(outputFile) or "./"
+    if not os.path.isdir(output_dir):
+        raise ValueError(f"Invalid directory for the output file: {output_dir}")
+
+    if not os.access(output_dir, os.W_OK):
+        raise PermissionError(f"Cannot write to the directory: {output_dir}")
+
+    try:
+        with open(inputFile, 'rb') as infile, open(outputFile, 'wb') as outfile:
+            for _ in range(count):
+                data = infile.read(blockSize)
+                if not data:
+                    break
+                outfile.write(data)
+    except Exception as e:
+        raise RuntimeError(f"Failed to copy data from {inputFile} to {outputFile}: {e}")
+        
+def createRawImg(path: str, size: int) -> str:
+    """
+    Creates a raw image file for QEMU.
+    
+    Args:
+        path (str): Path to the raw image file.
+        size (int): Size of the image in bytes.
+    
+    Returns:
+        str: Path to the created raw image file.
+    
+    Raises:
+        RuntimeError: If the image creation fails.
+    """
+    
+    # Check that the path is valid
+    parentDir = os.path.dirname(path) or "./"
+    if not os.access(parentDir, os.W_OK):
+        raise PermissionError(f"Cannot write to the directory: {parentDir}")
+    if not isinstance(size, int) or size <= 0:
+        raise ValueError(f"Invalid size for the raw image: {size}. Size must be a positive integer.")
+    
+    if os.path.exists(path):
+        raise FileExistsError(f"Raw image file {path} already exists. Please choose a different path or remove the existing file.")
+    
+    # Create the raw image file
+    dd(inputFile="/dev/zero", outputFile=path, count=size // 512, blockSize=512)
+    if not os.path.exists(path):
+        raise RuntimeError(f"Failed to create raw image file at {path}.")
+    
+    # Create partition table using sfdisk
+    try:
+        subprocess.run(
+            ["sfdisk", path, "--no-reread", "--force"],
+            input="label: dos\ntype=83",
+            text=True,
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to create partition table for raw image {path}: {e}")
+    
+    # Add a ext2 filesystem to the raw image
+    try:
+        subprocess.run(
+            ["mke2fs", path], 
+            text=True,
+            check=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to create ext2 filesystem on raw image {path}: {e}")
+    
+    return path

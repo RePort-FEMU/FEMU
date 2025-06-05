@@ -3,9 +3,20 @@ import shutil
 import os
 import sys
 
-from common import RunningMode, Architecture, Endianess
+from common import RunningMode, Architecture, Endianess, KILO, MEGA, GIGA
 from dbInterface import DBInterface
-from util import io_md5, checkArch, strings, checkCompatibility, getFilesInfo, getLinksInfo, getObjectIds, insertObjectsToImage, insertLinksToImage
+from util import (
+    io_md5,
+    checkArch,
+    strings,
+    checkCompatibility,
+    getFilesInfo,
+    getLinksInfo,
+    getObjectIds,
+    insertObjectsToImage,
+    insertLinksToImage,
+    createRawImg
+)
 
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'extractor'))
@@ -188,7 +199,7 @@ class Emulator:
             elif "init=" in string:
                 temp = string.split("init=")[1].split(" ")[0]
                 if temp:
-                    self.kernelInit = temp
+                    self.kernelInit = temp #TODO: here may find more than one init command
                     self.kernelInitString = string
                     logger.debug(f"Found kernel init command: {self.kernelInit}")
 
@@ -241,10 +252,34 @@ class Emulator:
         
         linkInfo = getLinksInfo(self.filesystemPath)
         insertLinksToImage(self.iid, linkInfo, self.dbIP, self.dbPort)
+        
+    def createScratchDir(self) -> str:
+        if not self.iid:
+            logger.error("Image ID is not set. Cannot create scratch directory.")
+            return ""
+        
+        if not os.path.exists(self.scratchPath):
+            try:
+                os.makedirs(self.scratchPath)
+                logger.info(f"Scratch directory created at: {self.scratchPath}")
+            except Exception as e:
+                logger.error(f"Failed to create scratch directory: {e}")
+                raise
+            
+        if not os.path.exists(os.path.join(self.scratchPath, self.iid)):
+            try:
+                os.makedirs(os.path.join(self.scratchPath, self.iid))
+                logger.info(f"Scratch subdirectory created for IID: {self.iid}")
+            except Exception as e:
+                logger.error(f"Failed to create scratch subdirectory: {e}")
+                raise
+            
+        return os.path.join(self.scratchPath, self.iid)
 
     def run(self):
         logger.info(f"Running emulator for firmware: {self.inputPath}")
         
+        logger.info(f"Step 1: Extracting firmware image {self.inputPath}")
         if not self.extract():
             logger.error("Extraction failed, aborting emulator run.")
             return
@@ -261,8 +296,6 @@ class Emulator:
             logger.error("Failed to dump objects to database.")
             return
         
-        
-        
-        
-
-
+        logger.info("Step 2: preparing image for emulation")
+        workDir = self.createScratchDir()
+        createRawImg(os.path.join(workDir, "raw.img"), 1 * GIGA)
