@@ -1,4 +1,5 @@
 import subprocess
+import logging
 import hashlib
 import tarfile
 import shutil
@@ -8,6 +9,8 @@ import os
 from common import Architecture, Endianess
 
 from dbInterface import DBInterface
+
+logger = logging.getLogger("emulator")
 
 def checkCompatibility(arch: Architecture, endianess: Endianess) -> bool:
     """
@@ -447,3 +450,148 @@ def createRawImg(path: str, size: int) -> str:
         raise RuntimeError(f"Failed to create ext2 filesystem on raw image {path}: {e}")
     
     return path
+
+def runAsRoot(command: list[str]) -> subprocess.CompletedProcess:
+    """
+    Runs a command as root using sudo.
+    
+    Args:
+        command (list[str]): Command to run as root.
+    
+    Returns:
+        subprocess.CompletedProcess: The result of the command execution.
+    
+    Raises:
+        RuntimeError: If the command fails.
+    """
+    try:
+        result = subprocess.run(["sudo"] + command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to run command as root: {e}")
+    
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed with return code {result.returncode}: {result.stderr.strip()}")
+    
+    return result
+
+def mountImage(rawImagePath: str, mountPoint: str) -> None:
+    """
+    Mounts a raw image file to a specified mount point.
+    
+    Args:
+        rawImagePath (str): Path to the raw image file.
+        mountPoint (str): Directory where the image will be mounted.
+    
+    Raises:
+        RuntimeError: If the mounting fails.
+    """
+    if not os.path.exists(rawImagePath):
+        raise FileNotFoundError(f"Raw image file {rawImagePath} does not exist.")
+    
+    if not os.path.exists(mountPoint):
+        try:
+            logger.warning(f"Creating mount point directory: {mountPoint}")
+            os.makedirs(mountPoint)
+        except OSError as e:
+            raise RuntimeError(f"Failed to create mount point {mountPoint}: {e}")
+    
+    if not os.path.isdir(mountPoint):
+        raise ValueError(f"Mount point {mountPoint} is not a directory.")
+    
+    if not os.access(mountPoint, os.W_OK):
+        raise PermissionError(f"Mount point {mountPoint} is not writable.")
+
+    runAsRoot(["mount", rawImagePath, mountPoint])
+    
+    
+def unmountImage(mountPoint: str) -> None:
+    """
+    Unmounts a mounted image file from the specified mount point.
+    
+    Args:
+        mountPoint (str): Directory where the image is mounted.
+    
+    Raises:
+        RuntimeError: If the unmounting fails.
+    """
+    if not os.path.exists(mountPoint):
+        raise FileNotFoundError(f"Mount point {mountPoint} does not exist.")
+    
+    if not os.path.isdir(mountPoint):
+        raise ValueError(f"Mount point {mountPoint} is not a directory.")
+    
+    runAsRoot(["umount", mountPoint])
+    
+    try:
+        os.rmdir(mountPoint)
+    except OSError as e:
+        raise RuntimeError(f"Failed to remove mount point directory {mountPoint}: {e}")
+    
+
+def find(searchPath: str | list[str], fileNames: str | list[str]) -> list[str]:
+    """
+    Finds all occurrences of one or more files in one or more directory trees.
+
+    Args:
+        searchPath (str | list[str]): Path or list of paths to the root directories.
+        fileNames (str | list[str]): Name or list of names of the files to find.
+
+    Returns:
+        list[str]: List of paths where the files are found.
+    """
+    if isinstance(searchPath, str):
+        searchPath = [searchPath]
+    elif not isinstance(searchPath, list):
+        raise TypeError("searchPath must be a string or a list of strings.")
+
+    if isinstance(fileNames, str):
+        fileNames = [fileNames]
+    elif not isinstance(fileNames, list):
+        raise TypeError("fileNames must be a string or a list of strings.")
+
+    foundFiles = []
+
+    for rootPath in searchPath:
+        if not os.path.exists(rootPath):
+            raise FileNotFoundError(f"Root path {rootPath} does not exist.")
+
+        for dirpath, _, filenames in os.walk(rootPath):
+            for name in fileNames:
+                if name in filenames:
+                    foundFiles.append(os.path.join(dirpath, name))
+
+    return foundFiles
+
+def findDirs(searchPath: str | list[str], dirNames: str | list[str]) -> list[str]:
+    """
+    Finds all occurrences of one or more directories in one or more directory trees.
+
+    Args:
+        searchPath (str | list[str]): Path or list of paths to the root directories.
+        dirNames (str | list[str]): Name or list of names of the directories to find.
+
+    Returns:
+        list[str]: List of paths where the directories are found.
+    """
+    if isinstance(searchPath, str):
+        searchPath = [searchPath]
+    elif not isinstance(searchPath, list):
+        raise TypeError("searchPath must be a string or a list of strings.")
+
+    if isinstance(dirNames, str):
+        dirNames = [dirNames]
+    elif not isinstance(dirNames, list):
+        raise TypeError("dirNames must be a string or a list of strings.")
+
+    foundDirs = []
+
+    for rootPath in searchPath:
+        if not os.path.exists(rootPath):
+            raise FileNotFoundError(f"Root path {rootPath} does not exist.")
+
+        for dirpath, dirnames, _ in os.walk(rootPath):
+            for name in dirNames:
+                if name in dirnames:
+                    foundDirs.append(os.path.join(dirpath, name))
+
+    return foundDirs

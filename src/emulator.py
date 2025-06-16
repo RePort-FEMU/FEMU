@@ -15,23 +15,16 @@ from util import (
     getObjectIds,
     insertObjectsToImage,
     insertLinksToImage,
-    createRawImg
+    createRawImg,
+    mountImage,
+    unmountImage,
 )
 
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'extractor'))
 from extractor.extractor import extract
-
-# Set up a specific logger for this module
-logger = logging.getLogger("emulator")
-logger.setLevel(logging.DEBUG)  # Change to DEBUG if needed
-
-# Optionally, add a handler if not already configured by the application
-if not logger.hasHandlers():
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s] %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+# Use the root logger, do not set up a separate logger or handler here.
+logger = logging.getLogger(__name__)
 
 class Emulator:
     def __init__(self, mode: RunningMode, inputPath: str, outputPath: str, brand: str = "auto", dbIP: str = "", dbPort: int = 5432):
@@ -66,8 +59,31 @@ class Emulator:
         
         self.kernelVersion = ""
         self.kernelVersionString = ""
-        self.kernelInit = ""
-        self.kernelInitString = ""
+        self.inferredKernelInit = []
+        self.inferredKernelInitStrings = []
+        
+    def state(self) -> dict[str, str | list[str]]:
+        # Generate a report of the emulator state
+        report = {
+            "mode": self.mode.value,
+            "inputPath": self.inputPath,
+            "outputPath": self.outputPath,
+            "imagePath": self.imagePath,
+            "scratchPath": self.scratchPath,
+            "brand": self.brand,
+            "hash": self.hash,
+            "iid": str(self.iid) if self.iid else "",
+            "kernelPath": self.kernelPath if self.kernelPath else "",
+            "filesystemPath": self.filesystemPath if self.filesystemPath else "",
+            "architecture": str(self.architecture),
+            "endianess": str(self.endianess),
+            "kernelVersion": self.kernelVersion,
+            "kernelVersionString": self.kernelVersionString,
+            "inferredKernelInit": self.inferredKernelInit,
+            "inferredKernelInitStrings": self.inferredKernelInitStrings
+        }
+        
+        return report
           
     def createDirectories(self):
         # Create necessary directories for images and scratch space
@@ -199,9 +215,9 @@ class Emulator:
             elif "init=" in string:
                 temp = string.split("init=")[1].split(" ")[0]
                 if temp:
-                    self.kernelInit = temp #TODO: here may find more than one init command
-                    self.kernelInitString = string
-                    logger.debug(f"Found kernel init command: {self.kernelInit}")
+                    self.inferredKernelInit.append(temp)
+                    self.inferredKernelInitStrings.append(string)
+                    logger.debug(f"Found kernel init command: {temp}")
 
         if not self.kernelVersion:
             logger.warning("Kernel version could not be inferred from the kernel image.")
@@ -276,6 +292,27 @@ class Emulator:
             
         return os.path.join(self.scratchPath, self.iid)
 
+    def extractFs(self, dst: str):
+        if not self.filesystemPath:
+            logger.error("Filesystem path is not set. Cannot extract filesystem.")
+            return False
+        
+        if not os.path.exists(dst):
+            try:
+                os.makedirs(dst)
+                logger.info(f"Destination directory created at: {dst}")
+            except Exception as e:
+                logger.error(f"Failed to create destination directory: {e}")
+                return False
+        
+        try:
+            shutil.unpack_archive(self.filesystemPath, dst)
+            logger.info(f"Filesystem extracted from {self.filesystemPath} to {dst}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to extract filesystem: {e}")
+            return False
+
     def run(self):
         logger.info(f"Running emulator for firmware: {self.inputPath}")
         
@@ -296,6 +333,13 @@ class Emulator:
             logger.error("Failed to dump objects to database.")
             return
         
-        logger.info("Step 2: preparing image for emulation")
-        workDir = self.createScratchDir()
-        createRawImg(os.path.join(workDir, "raw.img"), 1 * GIGA)
+        logger.debug(self.state())
+        
+        # logger.info("Step 2: preparing image for emulation")
+        
+        # workDir = self.createScratchDir()
+        # createRawImg(os.path.join(workDir, "raw.img"), 1 * GIGA)
+        # mountImage(os.path.join(workDir, "raw.img"), os.path.join(workDir, "mnt"))
+        # self.extractFs(os.path.join(workDir, "mnt"))
+
+        # installFirmadyne(os.path.join(workDir, "mnt"))
