@@ -555,9 +555,9 @@ def find(searchPath: str | list[str], fileNames: str | list[str]) -> list[str]:
         if not os.path.exists(rootPath):
             raise FileNotFoundError(f"Root path {rootPath} does not exist.")
 
-        for dirpath, _, filenames in os.walk(rootPath):
+        for dirpath, _, files in os.walk(rootPath):
             for name in fileNames:
-                if name in filenames:
+                if name in files:
                     foundFiles.append(os.path.join(dirpath, name))
 
     return foundFiles
