@@ -6,6 +6,171 @@ from util import find, findDirs, strings
 
 logger = logging.getLogger("emulator")
 
+def existsInGuest(imagePath:str, path: str) -> bool:
+    """
+    Checks if a path exists.
+    If the path is a symlink, checks if the target in host exists.
+    
+    Args:
+        path (str): The path to check.
+        
+    Returns:
+        bool: True if the path exists, False otherwise.
+    """
+    # If path is given as a guest path, correct it to the host path
+    if not path.startswith(imagePath):
+        path = guestToHostPath(imagePath, path)
+    
+    if os.path.exists(path):
+        return True
+    
+    if os.path.islink(path):
+        linkTarget = os.readlink(path)
+        correctedPath = guestToHostPath(imagePath, linkTarget)
+        while os.path.islink(correctedPath):
+            linkTarget = os.readlink(correctedPath)
+            correctedPath = guestToHostPath(imagePath, linkTarget)
+        return os.path.exists(correctedPath)
+    
+    return False
+
+def isFileInGuest(imagePath:str, path: str) -> bool:
+    """
+    Checks if a path is a file.
+    If the path is a symlink, checks if the target is a file.
+
+    Args:
+        imagePath (str): The root path of the image.
+        path (str): The path to check.
+        
+    Returns:
+        bool: True if the path is a file, False otherwise.
+    """
+    
+    if not path.startswith(imagePath):
+        path = guestToHostPath(imagePath, path)
+    
+    if os.path.islink(path):
+        linkTarget = os.readlink(path)
+        correctedPath = guestToHostPath(imagePath, linkTarget)
+        while os.path.islink(correctedPath):
+            linkTarget = os.readlink(correctedPath)
+            correctedPath = guestToHostPath(imagePath, linkTarget)
+        return os.path.isfile(correctedPath)
+    
+    return os.path.isfile(path)
+
+def isDirInGuest(imagePath: str, path: str) -> bool:
+    """
+    Checks if a path is a directory.
+    If the path is a symlink, checks if the target is a directory.
+
+    Args:
+        imagePath (str): The root path of the image.
+        path (str): The path to check.
+        
+    Returns:
+        bool: True if the path is a directory, False otherwise.
+    """
+    if not path.startswith(imagePath):
+        path = guestToHostPath(imagePath, path)
+    
+    if os.path.islink(path):
+        linkTarget = os.readlink(path)
+        correctedPath = guestToHostPath(imagePath, linkTarget)
+        while os.path.islink(correctedPath):
+            linkTarget = os.readlink(correctedPath)
+            correctedPath = guestToHostPath(imagePath, linkTarget)
+        return os.path.isdir(correctedPath)
+    
+    return os.path.isdir(path)
+
+def fileInGuestNotEmpty(imagePath: str, path: str) -> bool:
+    """
+    Checks if a file exists and is not empty.
+    If the path is a symlink, checks if the target is a file and not empty.
+
+    Args:
+        imagePath (str): The root path of the image.
+        path (str): The path to check.
+        
+    Returns:
+        bool: True if the file exists and is not empty, False otherwise.
+    """
+    
+    if not path.startswith(imagePath):
+        path = guestToHostPath(imagePath, path)
+    
+    if os.path.islink(path):
+        linkTarget = os.readlink(path)
+        correctedPath = guestToHostPath(imagePath, linkTarget)
+        while os.path.islink(correctedPath):
+            linkTarget = os.readlink(correctedPath)
+            correctedPath = guestToHostPath(imagePath, linkTarget)
+        return os.path.isfile(correctedPath) and os.path.getsize(correctedPath) > 0
+    
+    return os.path.isfile(path) and os.path.getsize(path) > 0
+
+def recursiveChmod(path: str, mode: int, imagePath: str = "", addPerms = False) -> None:
+    """
+    Recursively changes the permissions of a file or directory.
+    If the imagePath is provided, this function will also change the permissions on possible symlink targets on the guest.
+    Also, if the imagePath is provided, the path will be fixed to the host path.
+    
+    Args:
+        path (str): The path to change permissions for.
+        mode (int): The mode to set the permissions to.
+        imagePath (str): The root path of the image.
+        addPerms (bool): If True, adds the permissions to the existing ones, otherwise replaces them.
+    
+    """
+    
+    if imagePath and not path.startswith(imagePath):
+        path = guestToHostPath(imagePath, path)
+            
+    if not os.path.exists(path):
+        logger.warning(f"Path {path} does not exist, skipping chmod.")
+        return
+    
+    for root, dirs, files in os.walk(path):
+        for d in dirs:
+            dirPath = os.path.join(root, d)
+            targetPath = dirPath
+            if os.path.islink(dirPath) and imagePath:
+                linkTarget = os.readlink(dirPath)
+                correctedPath = guestToHostPath(imagePath, linkTarget)
+                while os.path.islink(correctedPath):
+                    linkTarget = os.readlink(correctedPath)
+                    correctedPath = guestToHostPath(imagePath, linkTarget)
+                targetPath = correctedPath
+            if os.path.exists(targetPath):
+                if addPerms:
+                    current_mode = os.stat(targetPath).st_mode
+                    os.chmod(targetPath, current_mode | mode)
+                else:
+                    os.chmod(targetPath, mode)
+            else:
+                logger.warning(f"Target dir {targetPath} does not exist, skipping chmod.")
+
+        for f in files:
+            filePath = os.path.join(root, f)
+            targetPath = filePath
+            if os.path.islink(filePath) and imagePath:
+                linkTarget = os.readlink(filePath)
+                correctedPath = guestToHostPath(imagePath, linkTarget)
+                while os.path.islink(correctedPath):
+                    linkTarget = os.readlink(correctedPath)
+                    correctedPath = guestToHostPath(imagePath, linkTarget)
+                targetPath = correctedPath
+            if os.path.exists(targetPath):
+                if addPerms:
+                    current_mode = os.stat(targetPath).st_mode
+                    os.chmod(targetPath, current_mode | mode)
+                else:
+                    os.chmod(targetPath, mode)
+            else:
+                logger.warning(f"Target file {targetPath} does not exist, skipping chmod.")
+    
 def hostToGuestPath(imagePath: str, path: str) -> str:
     """
     Fixes the root of a path by replacing the host root with the image root.
@@ -86,9 +251,8 @@ def findInit(rootPath: str, suspectedInits: list[str]) -> list[str]:
     possibleInits = suspectedInits.copy()
     
     # Add default init commands if not already present
-    defaultInitPath = os.path.join(rootPath, "init")
-    if os.path.exists(defaultInitPath) and not os.path.isdir(defaultInitPath):
-        possibleInits.append(hostToGuestPath(rootPath, defaultInitPath))
+    if existsInGuest(rootPath, "/init") and not isDirInGuest(rootPath, "/init"):
+        possibleInits.append(hostToGuestPath(rootPath, "/init"))
 
     for possibleInit in ["rcS", "preinit", "preinitMT"]:
         results = find(rootPath, possibleInit)
@@ -113,27 +277,16 @@ def findInit(rootPath: str, suspectedInits: list[str]) -> list[str]:
     for init in uniqueInits:
         initHostPath = guestToHostPath(rootPath, init)
             
-        if os.path.isdir(initHostPath):
+        if isDirInGuest(rootPath, init):
             continue
-        
-        if os.path.isfile(initHostPath):
+
+        if isFileInGuest(rootPath, init):
             foundInits.append(init)
             continue
             
-        # Check for symlinks (since we are not chrooted all of them are broken)
-        if os.path.islink(initHostPath):
-            linkTarget = os.readlink(initHostPath)
-            hostTargetPath = guestToHostPath(rootPath, linkTarget)
-
-            if os.path.isdir(hostTargetPath): # If link points to a directory, skip it
-                continue
-            
-            if os.path.isfile(hostTargetPath): # If link is not broken leave it as is
-                foundInits.append(init)
-                continue
-            
         # If file does not exist, or symlink is broken, try to locate it 
-        filename = os.path.basename(initHostPath)
+        filename = os.path.basename(init)
+        # TODO: Dereference possible symlinks
         possibleLocations = [guestToHostPath(rootPath, loc) for loc in ["/bin", "/sbin", "/usr/bin", "/usr/sbin"]]
         results = find(possibleLocations, filename)
 
@@ -148,6 +301,7 @@ def findInit(rootPath: str, suspectedInits: list[str]) -> list[str]:
             logging.debug(f"Fixed file {init} by creating a symlink to {linkTarget}.")
             continue
         
+        # FIRMAE diff
         # If the name of the file was not found, last resort to try to find the old target if it was a symlink
         if os.path.islink(initHostPath):
             linkTarget = os.readlink(initHostPath)
@@ -199,49 +353,49 @@ def findServices(rootPath: str) -> dict[str, str]:
     name = ""
     startCommand = ""
     
-    if os.path.exists(guestToHostPath(rootPath, "/etc/init.d/uhttpd")):
+    if existsInGuest(rootPath, "/etc/init.d/uhttpd"):
         services["/etc/init.d/uhttpd"] = "/etc/init.d/uhttpd start"
         if not found:
             found = True
             name = "uhttpd"
             startCommand = "/etc/init.d/uhttpd start"
 
-    if os.path.exists(guestToHostPath(rootPath, "/usr/bin/httpd")):
+    if existsInGuest(rootPath, "/usr/bin/httpd"):
         services["/usr/bin/httpd"] = "/usr/bin/httpd"
         if not found:
             found = True
             name = "httpd"
             startCommand = "/usr/bin/httpd"
 
-    if os.path.exists(guestToHostPath(rootPath, "/usr/sbin/httpd")):
+    if existsInGuest(rootPath, "/usr/sbin/httpd"):
         services["/usr/sbin/httpd"] = "/usr/sbin/httpd"
         if not found:
             found = True
             name = "httpd"
             startCommand = "/usr/sbin/httpd"
 
-    if os.path.exists(guestToHostPath(rootPath, "/bin/goahead")):
+    if existsInGuest(rootPath, "/bin/goahead"):
         services["/bin/goahead"] = "/bin/goahead"
         if not found:
             found = True
             name = "goahead"
             startCommand = "/bin/goahead"
 
-    if os.path.exists(guestToHostPath(rootPath, "/bin/alphapd")):
+    if existsInGuest(rootPath, "/bin/alphapd"):
         services["/bin/alphapd"] = "/bin/alphapd"
         if not found:
             found = True
             name = "alphapd"
             startCommand = "/bin/alphapd"
 
-    if os.path.exists(guestToHostPath(rootPath, "/bin/boa")):
+    if existsInGuest(rootPath, "/bin/boa"):
         services["/bin/boa"] = "/bin/boa"
         if not found:
             found = True
             name = "boa"
             startCommand = "/bin/boa"
 
-    if os.path.exists(guestToHostPath(rootPath, "/usr/sbin/lighttpd")):
+    if existsInGuest(rootPath, "/usr/sbin/lighttpd"):
         services["/usr/sbin/lighttpd"] = "/usr/sbin/lighttpd -f /etc/lighttpd/lighttpd.conf"
         if not found:
             found = True
@@ -272,12 +426,13 @@ def readIfLinked(path: str, imagePath: str = "", translateToHost: bool = True) -
     Returns:
         str: The target of the symlink if it exists, otherwise the original path.
     """
-    if not os.path.exists(path):
+    if not os.path.lexists(path):
         return path
     
     if not os.path.islink(path):
         return path
     
+    # TODO: Possibly check If new path is a symlink and read it again
     linkTarget = os.readlink(path)
     
     if translateToHost:
@@ -303,7 +458,7 @@ def createReferencedDirectories(rootPath: str) -> None:
     createdDirs = set()
     for location in executableLocations:
         if not os.path.exists(guestToHostPath(rootPath, location)):
-            logger.warning(f"Executable location {location} does not exist, creating it.")
+            logger.warning(f"Executable location {location} does not exist")
             continue
 
         for root, _, files in os.walk(guestToHostPath(rootPath, location)):
@@ -332,23 +487,23 @@ def createReferencedDirectories(rootPath: str) -> None:
     with open(guestToHostPath(rootPath, "/firmadyne/dir_log"), "w") as f:
         f.writelines(f"{d}\n" for d in createdDirs)
         
-def addEssentialFiles(rootPath: str) -> None:
-    """
-    Adds essential files to the image in case they are missing.
+# def addEssentialFiles(rootPath: str) -> None:
+#     """
+#     Adds essential files to the image in case they are missing.
     
-    Args:
-        rootPath (str): Path to the Firmadyne root directory.
+#     Args:
+#         rootPath (str): Path to the Firmadyne root directory.
         
-    Raises:
-        RuntimeError: If the essential files cannot be created.
-    """
+#     Raises:
+#         RuntimeError: If the essential files cannot be created.
+#     """
     
-    os.makedirs(guestToHostPath(rootPath, "/etc"), exist_ok=True)
-    if not os.path.exists(guestToHostPath(rootPath, "/etc/TZ")) :
+#     os.makedirs(guestToHostPath(rootPath, "/etc"), exist_ok=True)
+#     if not os.path.exists(guestToHostPath(rootPath, "/etc/TZ")) :
     
 def fixFileSystem(rootPath: str) -> None:
     # Create links for busybox sh
-    if not os.path.exists(guestToHostPath(rootPath, "/bin/sh")):
+    if not existsInGuest(rootPath, "/bin/sh"):
         os.symlink("/firmadyne/busybox", guestToHostPath(rootPath, "/bin/sh"))
     os.symlink("/firmadyne/busybox", guestToHostPath(rootPath, "/firmadyne/sh"))
 
@@ -380,17 +535,16 @@ def fixFileSystem(rootPath: str) -> None:
         os.makedirs(readIfLinked(fullPath, rootPath), exist_ok=True)
 
     # Fix permissions on all **/bin and **/sbin directories
+    # TODO: make this more robust by checking if the directories are linked
     dirs = findDirs(rootPath, ["bin", "sbin"])
     for dirPath in dirs:
-        fullPath = guestToHostPath(rootPath, dirPath)
-        if os.path.exists(fullPath):
-            os.chmod(fullPath, os.stat(fullPath).st_mode | 0o111)
-            logger.debug(f"Fixed permissions on directory: {fullPath}")
+        if os.path.exists(dirPath):
+            recursiveChmod(dirPath, 0o111, rootPath, addPerms=True)
+            logger.debug(f"Fixed permissions on directory: {dirPath}")
         else:
-            logger.warning(f"Directory {fullPath} does not exist, skipping permission fix.")
+            logger.warning(f"Directory {dirPath} does not exist, skipping permission fix.")
 
-   
-    # Create directories referenced by binaries in the image
+   # Create directories referenced by binaries in the image
     try:
         createReferencedDirectories(rootPath)
     except RuntimeError as e:
