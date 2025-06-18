@@ -85,7 +85,7 @@ def isDirInGuest(imagePath: str, path: str) -> bool:
     
     return os.path.isdir(path)
 
-def isGuestFileNotEmpty(imagePath: str, path: str) -> bool:
+def isFileInGuestNotEmpty(imagePath: str, path: str) -> bool:
     """
     Checks if a file exists and is not empty.
     If the path is a symlink, checks if the target is a file and not empty.
