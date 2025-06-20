@@ -27,13 +27,15 @@ from extractor.extractor import extract
 logger = logging.getLogger(__name__)
 
 class Emulator:
-    def __init__(self, mode: RunningMode, inputPath: str, outputPath: str, brand: str = "auto", dbIP: str = "", dbPort: int = 5432):
+    def __init__(self, mode: RunningMode, inputPath: str, outputPath: str, brand: str = "auto", toolsPath: str = "../tools", artifactPath: str = "../artifacts", dbIP: str = "", dbPort: int = 5432):
         # Information about the emulator environment
         self.mode = mode
         self.inputPath = inputPath
         self.outputPath = outputPath
         self.imagePath = outputPath + "/images"
         self.scratchPath = outputPath + "/scratch"
+        self.toolsPath = toolsPath
+        self.artifactPath = artifactPath
         self.brand = brand
         self.dbIP = dbIP
         self.dbPort = dbPort
@@ -70,6 +72,8 @@ class Emulator:
             "outputPath": self.outputPath,
             "imagePath": self.imagePath,
             "scratchPath": self.scratchPath,
+            "toolsPath": self.toolsPath,
+            "artifactPath": self.artifactPath,
             "brand": self.brand,
             "hash": self.hash,
             "iid": str(self.iid) if self.iid else "",

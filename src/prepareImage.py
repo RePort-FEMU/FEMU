@@ -210,21 +210,21 @@ def guestToHostPath(imagePath: str, path: str) -> str:
     logger.debug(f"Fixed path: {fixedPath}")
     return fixedPath
 
-def installFirmadyne(rootPath: str) -> None:
+def initFirmadyne(rootPath: str) -> None:
     """
-    Installs Firmadyne by creating necessary directories and copying files.
+    Initialize Firmadyne by creating necessary directories.
     
     Args:
         rootPath (str): Path to the Firmadyne root directory.
     Raises:
-        RuntimeError: If the installation fails.
+        RuntimeError: If the initialization fails.
     """
     
     if not os.path.exists(rootPath):
         logger.error(f"Root path {rootPath} does not exist.")
         raise RuntimeError(f"Root path {rootPath} does not exist.")
-    
-    logger.info("Installing Firmadyne...")
+
+    logger.info("Initializing Firmadyne...")
     try:
         os.mkdir(os.path.join(rootPath, "firmadyne"))
         os.mkdir(os.path.join(rootPath, "firmadyne", "libnvram"))
@@ -707,8 +707,8 @@ def fixFileSystem(rootPath: str) -> None:
     
 def prepareImage(rootPath: str, state: dict[str, str | list[str]]) -> bool:
     """
-    Prepares the image for emulation by installing Firmadyne, creating necessary directories, and copying files.
-    
+    Prepares the image for emulation by initializing Firmadyne, finding the init commands, fixing the file system, adding vital directories as well as NVRAM entries.
+
     Args:
         rootPath (str): Path to the Firmadyne root directory.
 
@@ -727,9 +727,9 @@ def prepareImage(rootPath: str, state: dict[str, str | list[str]]) -> bool:
         return False
     
     try:
-        installFirmadyne(rootPath)
+        initFirmadyne(rootPath)
     except RuntimeError as e:
-        logger.error(f"Failed to install Firmadyne: {e}")
+        logger.error(f"Failed to initialize Firmadyne: {e}")
         return False
 
     try:

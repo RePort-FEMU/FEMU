@@ -17,6 +17,8 @@ def parseArguments() -> argparse.Namespace:
     parser.add_argument("-i", "--input", type=str, required=True, help="Path to the firmware image or directory.")
     parser.add_argument("-o", "--output", type=str, help="Output path for the results and images.", default="./output")
     parser.add_argument("-b", "--brand", type=str, help="Brand of the firmware (e.g., 'TP-Link', 'Netgear').", default="auto")
+    parser.add_argument("-t", "--tools", type=str, help="Path to the tools directory.", default="../tools")
+    parser.add_argument("-a", "--artifacts", type=str, help="Path to the artifacts directory.", default="../artifacts")
     parser.add_argument("-sql", type=str, help="IP of postgreSQL database.", default=None)
     parser.add_argument("-p", "--port", type=int, help="Port of the postgreSQL database.", default=5432)
     
@@ -61,6 +63,8 @@ def main():
             inputPath=inputFile,
             outputPath=args.output,
             brand=args.brand,
+            toolsPath=args.tools,
+            artifactPath=args.artifacts,
             dbIP=args.sql,
             dbPort=args.port
         )
