@@ -595,3 +595,30 @@ def findDirs(searchPath: str | list[str], dirNames: str | list[str]) -> list[str
                     foundDirs.append(os.path.join(dirpath, name))
 
     return foundDirs
+
+def findStringInBinFile(filePath: str, searchString: str) -> bool:
+    """
+    Checks if a specific string is present in a file.
+
+    Args:
+        filePath (str): Path to the file.
+        searchString (str): String to search for in the file.
+
+    Returns:
+        bool: True if the string is found, False otherwise.
+    
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        PermissionError: If the file cannot be read.
+    """
+    if not os.path.exists(filePath):
+        raise FileNotFoundError(f"File {filePath} does not exist.")
+    
+    if not os.access(filePath, os.R_OK):
+        raise PermissionError(f"File {filePath} is not readable.")
+    
+    stringsFound = strings(filePath)
+    for stringFound in stringsFound:
+        if searchString in stringFound:
+            return True
+    return False

@@ -1,8 +1,9 @@
 import logging
+import stat
 import os
 import re
 
-from util import find, findDirs, strings
+from util import find, findDirs, strings, findStringInBinFile
 
 logger = logging.getLogger("emulator")
 
@@ -419,7 +420,7 @@ def readIfLinked(path: str, imagePath: str = "", translateToHost: bool = True) -
     If the path is a symlink, reads the target of the symlink and fixes it to the host path.
     
     Args:
-        path (str): The path to check.
+        path (str): The host path to check.
         imagePath (str): The image path at the host. If not provided, uses the current working directory.
         translateToHost (bool): If True, translates the path to the host path.
         
@@ -487,20 +488,165 @@ def createReferencedDirectories(rootPath: str) -> None:
     with open(guestToHostPath(rootPath, "/firmadyne/dir_log"), "w") as f:
         f.writelines(f"{d}\n" for d in createdDirs)
         
-# def addEssentialFiles(rootPath: str) -> None:
-#     """
-#     Adds essential files to the image in case they are missing.
+def populateEtc(rootPath: str) -> None:
+    """
+    Populates the /etc directory with necessary files.
     
-#     Args:
-#         rootPath (str): Path to the Firmadyne root directory.
+    Args:
+        rootPath (str): Path to the Firmadyne root directory.
+    """
+
+    os.makedirs(readIfLinked(guestToHostPath(rootPath, "/etc"), rootPath), exist_ok=True)
+
+    essentials = {
+        "/etc/TZ": "EST5EDT\n",
+        "/etc/hosts": "127.0.0.1 localhost\n",
+        "/etc/passwd": "root::0:0:root:/root:/bin/sh\n",
+    }
+    
+    for filePath, content in essentials.items():
+        if not isFileInGuestNotEmpty(rootPath, filePath):
+            fullPath = readIfLinked(guestToHostPath(rootPath, filePath), rootPath)
+            os.makedirs(os.path.dirname(fullPath), exist_ok=True)
+            with open(fullPath, "w") as f:
+                f.write(content)
+                logger.debug(f"Created essential file: {fullPath}")  
+                
+def populateDev(rootPath: str) -> None:
+    """
+    Populates the /dev directory with necessary files.
+    
+    Args:
+        rootPath (str): Path to the Firmadyne root directory.
+    """
+
+    devPath = readIfLinked(guestToHostPath(rootPath, "/dev"), rootPath)
+
+    os.makedirs(devPath, exist_ok=True)
+    fileCount = len(os.listdir(devPath))
+    
+    if fileCount <= 5:
+        logger.warning("Creating device nodes!")
         
-#     Raises:
-#         RuntimeError: If the essential files cannot be created.
-#     """
+        os.makedirs(guestToHostPath(rootPath, "/dev/mtd"), exist_ok=True)
+        os.makedirs(guestToHostPath(rootPath, "/dev/mtdblock"), exist_ok=True)
+        os.makedirs(guestToHostPath(rootPath, "/dev/pts"), exist_ok=True)
+        
+        nodesToCreate = {
+            "/dev/mem": {"type": stat.S_IFCHR, "perms": 0o660, "major": 1, "minor": 1},
+            "/dev/kmem": {"type": stat.S_IFCHR, "perms": 0o640, "major": 1, "minor": 2},
+            "/dev/null": {"type": stat.S_IFCHR, "perms": 0o666, "major": 1, "minor": 3},
+            "/dev/zero": {"type": stat.S_IFCHR, "perms": 0o666, "major": 1, "minor": 5},
+            "/dev/random": {"type": stat.S_IFCHR, "perms": 0o444, "major": 1, "minor": 8},
+            "/dev/urandom": {"type": stat.S_IFCHR, "perms": 0o444, "major": 1, "minor": 9},
+            "/dev/armem": {"type": stat.S_IFCHR, "perms": 0o666, "major": 1, "minor": 13},
+            
+            "/dev/tty": {"type": stat.S_IFCHR, "perms": 0o666, "major": 5, "minor": 0},
+            "/dev/console": {"type": stat.S_IFCHR, "perms": 0o622, "major": 5, "minor": 1},
+            "/dev/ptmx": {"type": stat.S_IFCHR, "perms": 0o666, "major": 5, "minor": 2},
+            "/dev/tty0": {"type": stat.S_IFCHR, "perms": 0o622, "major": 4, "minor": 0},
+            "/dev/ttyS0": {"type": stat.S_IFCHR, "perms": 0o660, "major": 4, "minor": 64},
+            "/dev/ttyS1": {"type": stat.S_IFCHR, "perms": 0o660, "major": 4, "minor": 65},
+            "/dev/ttyS2": {"type": stat.S_IFCHR, "perms": 0o660, "major": 4, "minor": 66},
+            "/dev/ttyS3": {"type": stat.S_IFCHR, "perms": 0o660, "major": 4, "minor": 67},
+            "/dev/adsl0": {"type": stat.S_IFCHR, "perms": 0o644, "major": 100, "minor": 0},
+            "/dev/ppp": {"type": stat.S_IFCHR, "perms": 0o644, "major": 108, "minor": 0},
+            "/dev/hidraw0": {"type": stat.S_IFCHR, "perms": 0o666, "major": 251, "minor": 0},
+        }
+        
+        for i in range(11):
+            nodesToCreate[f"/dev/mtd/{i}"] = {"type": stat.S_IFCHR, "perms": 0o644, "major": 90, "minor": i * 2}
+            
+        for i in range(11):
+            nodesToCreate[f"/dev/mtd{i}"] = {"type": stat.S_IFCHR, "perms": 0o644, "major": 90, "minor": i * 2}
+            nodesToCreate[f"/dev/mtdr{i}"] = {"type": stat.S_IFCHR, "perms": 0o644, "major": 90, "minor": i * 2 + 1}
+
+        for i in range(11):
+            nodesToCreate[f"/dev/mtdblock/{i}"] = {"type": stat.S_IFBLK, "perms": 0o644, "major": 31, "minor": i}
+            nodesToCreate[f"/dev/mtdblock{i}"] = {"type": stat.S_IFBLK, "perms": 0o644, "major": 31, "minor": i}
+
+        for i in range(4):
+            nodesToCreate[f"/dev/tts/{i}"] = {"type": stat.S_IFCHR, "perms": 0o660, "major": 4, "minor": 64+i}
+            
+        for node, attrs in nodesToCreate.items():
+            nodePath = readIfLinked(guestToHostPath(rootPath, node), rootPath)
+            if not os.path.lexists(nodePath):
+                os.mknod(nodePath, mode=attrs["type"] | attrs["perms"], device=os.makedev(attrs["major"], attrs["minor"]))
+                logger.debug(f"Created device node: {nodePath} with major: {attrs['major']} minor: {attrs['minor']}")
+
+
+    # Create gpio files
+    if (isFileInGuest(rootPath, "/dev/gpio") and findStringInBinFile(readIfLinked(guestToHostPath(rootPath, "/dev/gpio"), rootPath), "/dev/gpio/in")) or \
+        (isFileInGuest(rootPath, "/usr/lib/libcm.so") and findStringInBinFile(readIfLinked(guestToHostPath(rootPath, "/usr/lib/libcm.so"), rootPath), "/dev/gpio/in")) or \
+        (isFileInGuest(rootPath, "/usr/lib/libshared.so") and findStringInBinFile(readIfLinked(guestToHostPath(rootPath, "/usr/lib/libshared.so"), rootPath), "/dev/gpio/in")):
+
+        logger.info("Creating /dev/gpio files...")
+        # Remove old gpio files if they exist
+        if isFileInGuest(rootPath, "/dev/gpio"):
+            os.remove(readIfLinked(guestToHostPath(rootPath, "/dev/gpio"), rootPath))
+            
+        os.mkdir(guestToHostPath(rootPath, "/dev/gpio"))
+        with open(guestToHostPath(rootPath, "/dev/gpio/in"), "wb") as f:
+            f.write(b"\xff" * 4)
+
+
+def addEssentialFiles(rootPath: str) -> None:
+    """
+    Adds essential files to the image in case they are missing.
+
+    Args:
+        rootPath (str): Path to the Firmadyne root directory.
+    Raises:
+        RuntimeError: If the essential files cannot be created.
+    """
+
+    populateEtc(rootPath)
+    populateDev(rootPath)
     
-#     os.makedirs(guestToHostPath(rootPath, "/etc"), exist_ok=True)
-#     if not os.path.exists(guestToHostPath(rootPath, "/etc/TZ")) :
+def preventReboot(rootPath: str) -> None:
+    os.remove(guestToHostPath(rootPath, "/sbin/reboot")) if existsInGuest(rootPath, "/sbin/reboot") else None
+    os.remove(guestToHostPath(rootPath, "/etc/scripts/sys_resetbutton")) if existsInGuest(rootPath, "/etc/scripts/sys_resetbutton") else None
+
+def addNvramEntries(rootPath: str) -> None:
+    """
+    Tries to add NVRAM entries to the image.
+    Args:
+        rootPath (str): Path to the Firmadyne root directory.
+    Raises:
+        RuntimeError: If the NVRAM entries cannot be added.
+    """
     
+    entries = {}
+    
+    if isFileInGuest(rootPath, "/sbin/rc") and findStringInBinFile(readIfLinked(guestToHostPath(rootPath, "/sbin/rc"), rootPath), "ipv6_6to4_lan_ip"):
+        entries["ipv6_6to4_lan_ip"] = "2002:7f00:0001::"
+
+    if isFileInGuest(rootPath, "/lib/libacos_shared.so") and findStringInBinFile(readIfLinked(guestToHostPath(rootPath, "/lib/libacos_shared.so"), rootPath), "time_zone_x"):
+        entries["time_zone_x"] = "0"
+        
+    # rip_multicast
+    if isFileInGuest(rootPath, "/usr/sbin/httpd") and findStringInBinFile(readIfLinked(guestToHostPath(rootPath, "/usr/sbin/httpd"), rootPath), "rip_multicast"):
+        entries["rip_multicast"] = "0"
+
+    # bs_trustedip_enable
+    if isFileInGuest(rootPath, "/usr/sbin/httpd") and findStringInBinFile(readIfLinked(guestToHostPath(rootPath, "/usr/sbin/httpd"), rootPath), "bs_trustedip_enable"):
+        entries["bs_trustedip_enable"] = "0"
+
+    # filter_rule_tbl
+    if isFileInGuest(rootPath, "/usr/sbin/httpd") and findStringInBinFile(readIfLinked(guestToHostPath(rootPath, "/usr/sbin/httpd"), rootPath), "filter_rule_tbl"):
+        entries["filter_rule_tbl"] = ""
+
+    # rip_enable
+    if isFileInGuest(rootPath, "/sbin/acos_service") and findStringInBinFile(readIfLinked(guestToHostPath(rootPath, "/sbin/acos_service"), rootPath), "rip_enable"):
+        entries["rip_enable"] = "0"
+
+    # Write entries to /firmadyne/libnvram.override/
+    nvram_override_dir = guestToHostPath(rootPath, "/firmadyne/libnvram.override")
+    os.makedirs(nvram_override_dir, exist_ok=True)
+    for key, value in entries.items():
+        with open(os.path.join(nvram_override_dir, key), "w") as f:
+            f.write(value)
+
 def fixFileSystem(rootPath: str) -> None:
     # Create links for busybox sh
     if not existsInGuest(rootPath, "/bin/sh"):
@@ -551,10 +697,14 @@ def fixFileSystem(rootPath: str) -> None:
         logger.error(f"Failed to create referenced directories: {e}")
         raise RuntimeError(f"Failed to create referenced directories: {e}")
     
+    try:
+        addEssentialFiles(rootPath)
+    except RuntimeError as e:
+        logger.error(f"Failed to add essential files: {e}")
+        raise RuntimeError(f"Failed to add essential files: {e}")
     
-                
-
-
+    preventReboot(rootPath)
+    
 def prepareImage(rootPath: str, state: dict[str, str | list[str]]) -> bool:
     """
     Prepares the image for emulation by installing Firmadyne, creating necessary directories, and copying files.
@@ -592,6 +742,18 @@ def prepareImage(rootPath: str, state: dict[str, str | list[str]]) -> bool:
         findServices(rootPath)
     except RuntimeError as e:
         logger.error(f"Failed to find services: {e}")
+        return False
+
+    try:
+        fixFileSystem(rootPath)
+    except RuntimeError as e:
+        logger.error(f"Failed to fix file system: {e}")
+        return False
+    
+    try:
+        addNvramEntries(rootPath)
+    except RuntimeError as e:
+        logger.error(f"Failed to add NVRAM entries: {e}")
         return False
 
     return True
