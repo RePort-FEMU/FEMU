@@ -486,7 +486,7 @@ def fixFileSystem(rootPath: str) -> None:
     
     preventReboot(rootPath)
     
-def prepareImage(rootPath: str, state: dict[str, str | list[str]]) -> bool:
+def prepareImage(rootPath: str, possibleInits: list[str]) -> tuple[list[str], dict[str, str]] | None:
     """
     Prepares the image for emulation by initializing Firmadyne, finding the init commands, fixing the file system, adding vital directories as well as NVRAM entries.
 
@@ -494,7 +494,8 @@ def prepareImage(rootPath: str, state: dict[str, str | list[str]]) -> bool:
         rootPath (str): Path to the Firmadyne root directory.
 
     Returns:
-        bool: True if the preparation is successful, False otherwise.
+        None: If the preparation fails.
+        tuple[list[str], dict[str, str]]: A tuple containing a list of verified init commands and a dictionary of found services with their start commands.
         
     Raises:
         RuntimeError: If the preparation fails.
@@ -505,36 +506,16 @@ def prepareImage(rootPath: str, state: dict[str, str | list[str]]) -> bool:
     
     if not os.path.exists(rootPath):
         logger.error(f"Root path {rootPath} does not exist.")
-        return False
+        return None
     
-    try:
-        initFirmadyne(rootPath)
-    except RuntimeError as e:
-        logger.error(f"Failed to initialize Firmadyne: {e}")
-        return False
+    initFirmadyne(rootPath)
 
-    try:
-        findInit(rootPath, list(state.get("inferredKernelInit", [])))
-    except RuntimeError as e:
-        logger.error(f"Failed to find init commands: {e}")
-        return False
-    
-    try:
-        findServices(rootPath)
-    except RuntimeError as e:
-        logger.error(f"Failed to find services: {e}")
-        return False
+    verifiedInits = findInit(rootPath, possibleInits)
 
-    try:
-        fixFileSystem(rootPath)
-    except RuntimeError as e:
-        logger.error(f"Failed to fix file system: {e}")
-        return False
-    
-    try:
-        addNvramEntries(rootPath)
-    except RuntimeError as e:
-        logger.error(f"Failed to add NVRAM entries: {e}")
-        return False
+    foundServices = findServices(rootPath)
 
-    return True
+    fixFileSystem(rootPath)
+
+    addNvramEntries(rootPath)
+
+    return verifiedInits, foundServices

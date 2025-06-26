@@ -59,24 +59,8 @@ class Emulator:
         self.kernelVersionString = ""
         self.inferredKernelInit = []
         self.inferredKernelInitStrings = []
+        self.verifiedInits = []
         
-    def state(self) -> dict[str, str | list[str]]:
-        # Generate a report of the emulator state
-        report = {
-            "brand": self.config.brand,
-            "hash": self.hash,
-            "iid": str(self.iid) if self.iid else "",
-            "kernelPath": self.kernelPath if self.kernelPath else "",
-            "filesystemPath": self.filesystemPath if self.filesystemPath else "",
-            "architecture": str(self.architecture),
-            "endianess": str(self.endianess),
-            "kernelVersion": self.kernelVersion,
-            "kernelVersionString": self.kernelVersionString,
-            "inferredKernelInit": self.inferredKernelInit,
-            "inferredKernelInitStrings": self.inferredKernelInitStrings
-        }
-        
-        return report
           
     def createDirectories(self):
         # Create necessary directories for images and scratch space
