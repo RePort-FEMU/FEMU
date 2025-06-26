@@ -5,6 +5,7 @@ import sys
 
 from common import RunningMode, Architecture, Endianess, KILO, MEGA, GIGA
 from dbInterface import DBInterface
+from emulatorConfig import emulatorConfig
 from util import (
     io_md5,
     checkArch,
@@ -27,25 +28,20 @@ from extractor.extractor import extract
 logger = logging.getLogger(__name__)
 
 class Emulator:
-    def __init__(self, mode: RunningMode, inputPath: str, outputPath: str, brand: str = "auto", toolsPath: str = "../tools", artifactPath: str = "../artifacts", dbIP: str = "", dbPort: int = 5432):
+    def __init__(self, config: emulatorConfig):
         # Information about the emulator environment
-        self.mode = mode
-        self.inputPath = inputPath
-        self.outputPath = outputPath
-        self.imagePath = outputPath + "/images"
-        self.scratchPath = outputPath + "/scratch"
-        self.toolsPath = toolsPath
-        self.artifactPath = artifactPath
-        self.brand = brand
-        self.dbIP = dbIP
-        self.dbPort = dbPort
-        self.hash = io_md5(self.inputPath)
+        self.config = config
+        self.hash = io_md5(self.config.firmwarePath)
         
+        self.imagePath = os.path.join(self.config.outputPath, "images")
+        self.workDir = os.path.join(self.config.outputPath, "workDir")
+        
+
         # Create directories for images and scratch space
         self.createDirectories()
-        
-        if brand == "auto":
-            if dbIP:
+
+        if self.config.brand == "auto":
+            if self.config.sqlIP:
                 self.brand = self.detectBrand()
             else:
                 logger.warning("Brand detection is set to 'auto', but no database IP provided. Defaulting to 'unknown'.")
@@ -67,14 +63,7 @@ class Emulator:
     def state(self) -> dict[str, str | list[str]]:
         # Generate a report of the emulator state
         report = {
-            "mode": self.mode.value,
-            "inputPath": self.inputPath,
-            "outputPath": self.outputPath,
-            "imagePath": self.imagePath,
-            "scratchPath": self.scratchPath,
-            "toolsPath": self.toolsPath,
-            "artifactPath": self.artifactPath,
-            "brand": self.brand,
+            "brand": self.config.brand,
             "hash": self.hash,
             "iid": str(self.iid) if self.iid else "",
             "kernelPath": self.kernelPath if self.kernelPath else "",
@@ -99,20 +88,22 @@ class Emulator:
                 logger.error(f"Failed to create image directory: {e}")
                 raise
             
-        if not os.path.exists(self.scratchPath):
+        if not os.path.exists(self.workDir):
             try:
-                os.makedirs(self.scratchPath)
-                logger.info(f"Scratch directory created at: {self.scratchPath}")
+                os.makedirs(self.workDir)
+                logger.info(f"Work directory created at: {self.workDir}")
             except Exception as e:
-                logger.error(f"Failed to create scratch directory: {e}")
+                logger.error(f"Failed to create work directory: {e}")
                 raise
             
     def detectBrand(self):
         # Check if the firmware's hash is in the database
-        firmware_hash = io_md5(self.inputPath)
-
-        with DBInterface(self.dbIP, self.dbPort) as cur:
-            cur.execute("SELECT brand_id FROM image WHERE hash = %s", (firmware_hash,))
+        if not self.config.sqlIP:
+            logger.warning("No database IP provided. Cannot detect brand.")
+            return "unknown"
+        
+        with DBInterface(self.config.sqlIP, self.config.sqlPort) as cur:
+            cur.execute("SELECT brand_id FROM image WHERE hash = %s", (self.hash,))
             brand_id = cur.fetchone()
 
             if brand_id:
@@ -123,15 +114,15 @@ class Emulator:
         return "unknown"
     
     def updateDbImageInfo(self, field: str, value: str):
-        if not self.dbIP:
+        if not self.config.sqlIP:
             return True  # No database IP provided, skip update
         
         logger.debug(f"Updating database image info: {field} = {value} for image ID {self.iid}")
         if not self.iid:
             logger.error("Image ID is not set. Cannot update database image info.")
             return False
-        
-        with DBInterface(self.dbIP, self.dbPort) as cur:
+
+        with DBInterface(self.config.sqlIP, self.config.sqlPort) as cur:
             try:
                 cur.execute(f"UPDATE image SET {field} = %s WHERE id = %s", (value, self.iid))
                 cur.connection.commit()
@@ -144,25 +135,25 @@ class Emulator:
     
     def extract(self):
         # Extract the kernel and rootfs from the firmware image
-        logger.info(f"Extracting firmware image: {self.inputPath}")
+        logger.info(f"Extracting firmware image: {self.config.firmwarePath}")
         
         # First extract the filesystem without the kernel
-        result = extract(self.inputPath, self.imagePath, kernel=False, sqlIP=self.dbIP, sqlPort=self.dbPort, brand=self.brand, quiet=True)[0]
+        result = extract(self.config.firmwarePath, self.imagePath, kernel=False, sqlIP=self.config.sqlIP, sqlPort=self.config.sqlPort, brand=self.config.brand, quiet=True)[0]
         self.iid = str(result["tag"])
         
         if not result["status"]:
-            logger.error(f"Failed to extract filesystem from {self.inputPath}")
+            logger.error(f"Failed to extract filesystem from {self.config.firmwarePath}")
             return False
 
         self.filesystemPath = str(result["rootfsPath"])
         logger.debug(f"Root filesystem extracted to: {self.filesystemPath}")
 
         # Now extract the kernel
-        logger.info(f"Extracting kernel from firmware image: {self.inputPath}")
-        result = extract(self.inputPath, self.imagePath, filesystem=False, sqlIP=self.dbIP, sqlPort=self.dbPort, brand=self.brand, quiet=True)[0]
-        
+        logger.info(f"Extracting kernel from firmware image: {self.config.firmwarePath}")
+        result = extract(self.config.firmwarePath, self.imagePath, filesystem=False, sqlIP=self.config.sqlIP, sqlPort=self.config.sqlPort, brand=self.config.brand, quiet=True)[0]
+
         if not result["status"]:
-            logger.error(f"Failed to extract kernel from {self.inputPath}")
+            logger.error(f"Failed to extract kernel from {self.config.firmwarePath}")
             if self.filesystemPath:
                 shutil.rmtree(self.filesystemPath, ignore_errors=True)
             return False
@@ -180,7 +171,7 @@ class Emulator:
     
     def inferArchitecture(self):
         # Infer the architecture and endianess of the firmware
-        logger.info(f"Inferring architecture for firmware: {self.inputPath}")
+        logger.info(f"Inferring architecture for firmware: {self.config.firmwarePath}")
         
         if not self.iid:
             logger.error("Image ID is not set. Cannot infer architecture.")
@@ -203,7 +194,7 @@ class Emulator:
     
     def inferKernelVersion(self):
         # Infer the kernel version from the kernel image
-        logger.info(f"Inferring kernel version for firmware: {self.inputPath}")
+        logger.info(f"Inferring kernel version for firmware: {self.config.firmwarePath}")
         
         if not self.kernelPath:
             logger.error("Kernel path is not set. Cannot infer kernel version.")
@@ -233,7 +224,7 @@ class Emulator:
 
     def collectInfo(self):
         # Collect information about the firmware
-        logger.info(f"Collecting information for firmware: {self.inputPath}")
+        logger.info(f"Collecting information for firmware: {self.config.firmwarePath}")
         
         if not self.iid or not self.kernelPath or not self.filesystemPath:
             logger.error("Image ID, kernel path, or root filesystem path is not set. Cannot collect information.")
@@ -251,7 +242,7 @@ class Emulator:
         return True
     
     def dumpObjectsToDB(self):
-        if not self.dbIP:
+        if not self.config.sqlIP:
             logger.warning("No database IP provided, skipping database updates.")
             return True
         
@@ -266,35 +257,35 @@ class Emulator:
         logger.info("Dumping objects to database.")
         
         fileInfo = getFilesInfo(self.filesystemPath)
-        objectsIds, _ = getObjectIds(fileInfo, self.dbIP, self.dbPort)
-        
-        insertObjectsToImage(self.iid, objectsIds, fileInfo, self.dbIP, self.dbPort)
-        
+        objectsIds, _ = getObjectIds(fileInfo, self.config.sqlIP, self.config.sqlPort)
+
+        insertObjectsToImage(self.iid, objectsIds, fileInfo, self.config.sqlIP, self.config.sqlPort)
+
         linkInfo = getLinksInfo(self.filesystemPath)
-        insertLinksToImage(self.iid, linkInfo, self.dbIP, self.dbPort)
+        insertLinksToImage(self.iid, linkInfo, self.config.sqlIP, self.config.sqlPort)
         
-    def createScratchDir(self) -> str:
+    def createWorkDir(self) -> str:
         if not self.iid:
-            logger.error("Image ID is not set. Cannot create scratch directory.")
+            logger.error("Image ID is not set. Cannot create work directory.")
             return ""
         
-        if not os.path.exists(self.scratchPath):
+        if not os.path.exists(self.workDir):
             try:
-                os.makedirs(self.scratchPath)
-                logger.info(f"Scratch directory created at: {self.scratchPath}")
+                os.makedirs(self.workDir)
+                logger.info(f"Work directory created at: {self.workDir}")
             except Exception as e:
-                logger.error(f"Failed to create scratch directory: {e}")
+                logger.error(f"Failed to create work directory: {e}")
                 raise
             
-        if not os.path.exists(os.path.join(self.scratchPath, self.iid)):
+        if not os.path.exists(os.path.join(self.workDir, self.iid)):
             try:
-                os.makedirs(os.path.join(self.scratchPath, self.iid))
-                logger.info(f"Scratch subdirectory created for IID: {self.iid}")
+                os.makedirs(os.path.join(self.workDir, self.iid))
+                logger.info(f"Work subdirectory created for IID: {self.iid}")
             except Exception as e:
-                logger.error(f"Failed to create scratch subdirectory: {e}")
+                logger.error(f"Failed to create work subdirectory: {e}")
                 raise
-            
-        return os.path.join(self.scratchPath, self.iid)
+
+        return os.path.join(self.workDir, self.iid)
 
     def extractFs(self, dst: str):
         if not self.filesystemPath:
@@ -318,9 +309,9 @@ class Emulator:
             return False
 
     def run(self):
-        logger.info(f"Running emulator for firmware: {self.inputPath}")
+        logger.info(f"Running emulator for firmware: {self.config.firmwarePath}")
         
-        logger.info(f"Step 1: Extracting firmware image {self.inputPath}")
+        logger.info(f"Step 1: Extracting firmware image {self.config.firmwarePath}")
         if not self.extract():
             logger.error("Extraction failed, aborting emulator run.")
             return

@@ -5,6 +5,7 @@ import argparse
 from common import RunningMode
 from dbInterface import checkConnection
 from emulator import Emulator
+from emulatorConfig import emulatorConfig
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -17,8 +18,8 @@ def parseArguments() -> argparse.Namespace:
     parser.add_argument("-i", "--input", type=str, required=True, help="Path to the firmware image or directory.")
     parser.add_argument("-o", "--output", type=str, help="Output path for the results and images.", default="./output")
     parser.add_argument("-b", "--brand", type=str, help="Brand of the firmware (e.g., 'TP-Link', 'Netgear').", default="auto")
-    parser.add_argument("-t", "--tools", type=str, help="Path to the tools directory.", default="../tools")
-    parser.add_argument("-a", "--artifacts", type=str, help="Path to the artifacts directory.", default="../artifacts")
+    parser.add_argument("-s", "--scripts", type=str, help="Path to the scripts directory.", default="../scripts")
+    parser.add_argument("-bin", "--binaries", type=str, help="Path to the binaries directory.", default="../binaries")
     parser.add_argument("-sql", type=str, help="IP of postgreSQL database.", default=None)
     parser.add_argument("-p", "--port", type=int, help="Port of the postgreSQL database.", default=5432)
     
@@ -58,16 +59,16 @@ def main():
         inputFiles = [args.input]
         
     for inputFile in inputFiles:
-        em = Emulator(
-            mode=RunningMode(args.mode),
-            inputPath=inputFile,
+        em = Emulator(emulatorConfig(
+            runningMode=RunningMode(args.mode),
+            firmwarePath=inputFile,
             outputPath=args.output,
             brand=args.brand,
-            toolsPath=args.tools,
-            artifactPath=args.artifacts,
-            dbIP=args.sql,
-            dbPort=args.port
-        )
+            scriptsPath=args.scripts,
+            binariesPath=args.binaries,
+            sqlIP=args.sql,
+            sqlPort=args.port
+        ))
         logging.info(f"Initialized emulator for {inputFile} in mode {args.mode} with brand {args.brand}.")
         
         em.run()
