@@ -268,14 +268,6 @@ class Emulator:
         if not self.iid:
             logger.error("Image ID is not set. Cannot create work directory.")
             return ""
-        
-        if not os.path.exists(self.workDir):
-            try:
-                os.makedirs(self.workDir)
-                logger.info(f"Work directory created at: {self.workDir}")
-            except Exception as e:
-                logger.error(f"Failed to create work directory: {e}")
-                raise
             
         if not os.path.exists(os.path.join(self.workDir, self.iid)):
             try:
