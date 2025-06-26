@@ -303,9 +303,7 @@ class Emulator:
         if not self.dumpObjectsToDB():
             logger.error("Failed to dump objects to database.")
             return
-        
-        logger.debug(self.state())
-        
+                
         # logger.info("Step 2: preparing image for emulation")
         
         # workDir = self.createScratchDir()
