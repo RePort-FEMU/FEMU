@@ -440,7 +440,7 @@ def createRawImg(path: str, size: int) -> str:
     # Add a ext2 filesystem to the raw image
     try:
         subprocess.run(
-            ["mke2fs", path], 
+            ["mke2fs", "-E", "root_owner=1000:1000", path], 
             text=True,
             check=True,
             capture_output=True,

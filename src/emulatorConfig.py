@@ -1,4 +1,5 @@
 import logging
+import os
 
 from common import RunningMode
 from dbInterface import checkConnection
@@ -25,6 +26,12 @@ class emulatorConfig:
         self.binariesPath: str = binariesPath
         self.sqlIP: str | None = sqlIP
         self.sqlPort: int = sqlPort
+        
+        # For all paths, get the absolute path
+        self.firmwarePath = firmwarePath if firmwarePath.startswith("/") else os.path.abspath(f"./{firmwarePath}")
+        self.outputPath = outputPath if outputPath.startswith("/") else os.path.abspath(f"./{outputPath}")
+        self.scriptsPath = scriptsPath if scriptsPath.startswith("/") else os.path.abspath(f"./{scriptsPath}")
+        self.binariesPath = binariesPath if binariesPath.startswith("/") else os.path.abspath(f"./{binariesPath}")
         
         if self.sqlIP is None or self.sqlIP == "":
             logger.warning("No PostgreSQL IP provided. Some features may not work.")

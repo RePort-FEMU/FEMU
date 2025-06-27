@@ -18,12 +18,15 @@ def hostToGuestPath(imagePath: str, path: str) -> str:
         ValueError: If the imagePath does not start with '/'.
     """
     
-    if not imagePath.startswith("/"):
-        logger.error(f"Root path {imagePath} does not start with '/'.")
-        raise ValueError(f"Root path {imagePath} does not start with '/'.")
+    if not imagePath.startswith("/") or not path.startswith("/"):
+        logger.error(f"Root path {imagePath} or path {path} does not start with '/'.")
+        raise ValueError(f"Root path {imagePath} or path {path} does not start with '/'.")
+    
+    if imagePath.endswith("/"):
+        imagePath = imagePath[:-1]
     
     fixedPath = path.replace(imagePath, "/", 1)
-    logger.debug(f"Fixed path: {fixedPath}")
+    logger.debug(f"hostToGuestPath Fixed path: {path} to {fixedPath}")
     return fixedPath
 
 def guestToHostPath(imagePath: str, path: str) -> str:
@@ -40,12 +43,15 @@ def guestToHostPath(imagePath: str, path: str) -> str:
     Raises:
         ValueError: If the imagePath does not start with '/'.
     """
-    if not imagePath.startswith("/"):
-        logger.error(f"Root path {imagePath} does not start with '/'.")
-        raise ValueError(f"Root path {imagePath} does not start with '/'.")
+    if not imagePath.startswith("/") or not path.startswith("/"):
+        logger.error(f"Root path {imagePath} or path {path} does not start with '/'.")
+        raise ValueError(f"Root path {imagePath} or path {path} does not start with '/'.")
     
-    fixedPath = imagePath.replace("/", path, 1)
-    logger.debug(f"Fixed path: {fixedPath}")
+    if not imagePath.endswith("/"):
+        imagePath += "/"
+        
+    fixedPath = path.replace("/", imagePath, 1)
+    logger.debug(f"guestToHostPath Fixed path: {path} to {fixedPath}")
     return fixedPath
 
 def existsInGuest(imagePath:str, path: str) -> bool:
@@ -67,7 +73,7 @@ def existsInGuest(imagePath:str, path: str) -> bool:
     while os.path.islink(path):
         linkTarget = os.readlink(path)
         path = guestToHostPath(imagePath, linkTarget)
-        
+
     return os.path.exists(path) 
  
 

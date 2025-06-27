@@ -21,6 +21,8 @@ from util import (
     unmountImage,
 )
 
+from prepareImage import prepareImage
+
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'extractor'))
 from extractor.extractor import extract
@@ -248,7 +250,7 @@ class Emulator:
         linkInfo = getLinksInfo(self.filesystemPath)
         insertLinksToImage(self.iid, linkInfo, self.config.sqlIP, self.config.sqlPort)
         
-    def createWorkDir(self) -> str:
+    def getWorkDir(self) -> str:
         if not self.iid:
             logger.error("Image ID is not set. Cannot create work directory.")
             return ""
@@ -304,11 +306,27 @@ class Emulator:
             logger.error("Failed to dump objects to database.")
             return
                 
-        # logger.info("Step 2: preparing image for emulation")
+        logger.info("Step 2: preparing image for emulation")
         
-        # workDir = self.createScratchDir()
-        # createRawImg(os.path.join(workDir, "raw.img"), 1 * GIGA)
-        # mountImage(os.path.join(workDir, "raw.img"), os.path.join(workDir, "mnt"))
-        # self.extractFs(os.path.join(workDir, "mnt"))
+        workDir = self.getWorkDir()
+        
+        if os.path.isdir(os.path.join(workDir, "mnt")) and len(os.listdir(os.path.join(workDir, "mnt"))) > 0:
+            unmountImage(os.path.join(workDir, "mnt"))
+            shutil.rmtree(os.path.join(workDir, "mnt"), ignore_errors=True)
+            logger.warning("Unmounted and removed existing mount directory.")
+        
+        if os.path.exists(os.path.join(workDir, "raw.img")):
+            logger.info("Removing existing raw image.")
+            os.remove(os.path.join(workDir, "raw.img"))
+            logger.info("Removed existing raw image successfully.")
+            
+        createRawImg(os.path.join(workDir, "raw.img"), 1 * GIGA)
+        mountImage(os.path.join(workDir, "raw.img"), os.path.join(workDir, "mnt"))
+        self.extractFs(os.path.join(workDir, "mnt"))
 
-        # installFirmadyne(os.path.join(workDir, "mnt"))
+        try:
+            prepareImage(os.path.join(workDir, "mnt"), self.inferredKernelInit)
+        except Exception as e:
+            logger.error(f"Failed to prepare image: {e}")
+            # unmountImage(os.path.join(workDir, "mnt"))
+            return

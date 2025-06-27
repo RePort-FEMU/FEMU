@@ -39,7 +39,8 @@ def initFirmadyne(rootPath: str) -> None:
         os.mkdir(os.path.join(rootPath, "firmadyne", "libnvram.override"))
     except OSError as e:
         logger.error(f"Failed to create directories: {e}")
-        raise RuntimeError(f"Failed to create directories: {e}")    
+        raise RuntimeError(f"Failed to create directories: {e}")  
+    logger.info("Firmadyne initialized successfully.")  
     
     
 def findInit(rootPath: str, suspectedInits: list[str]) -> list[str]:
@@ -55,6 +56,8 @@ def findInit(rootPath: str, suspectedInits: list[str]) -> list[str]:
     Raises:
         RuntimeError: If the init list file cannot be created.
     """
+    logger.info("Finding init commands in the image...")
+    
     initListFile = os.path.join(rootPath, "firmadyne", "init")
     
     possibleInits = suspectedInits.copy()
@@ -431,6 +434,11 @@ def addNvramEntries(rootPath: str) -> None:
 def fixFileSystem(rootPath: str) -> None:
     # Create links for busybox sh
     if not existsInGuest(rootPath, "/bin/sh"):
+        #FirmAE diff
+        # if broken symlink, remove it before creating a new one
+        if os.path.lexists(guestToHostPath(rootPath, "/bin/sh")) and not os.path.islink(guestToHostPath(rootPath, "/bin/sh")):
+            os.remove(guestToHostPath(rootPath, "/bin/sh"))
+        
         os.symlink("/firmadyne/busybox", guestToHostPath(rootPath, "/bin/sh"))
     os.symlink("/firmadyne/busybox", guestToHostPath(rootPath, "/firmadyne/sh"))
 
