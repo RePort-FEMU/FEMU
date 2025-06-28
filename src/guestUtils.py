@@ -22,11 +22,10 @@ def hostToGuestPath(imagePath: str, path: str) -> str:
         logger.error(f"Root path {imagePath} or path {path} does not start with '/'.")
         raise ValueError(f"Root path {imagePath} or path {path} does not start with '/'.")
     
-    if imagePath.endswith("/"):
-        imagePath = imagePath[:-1]
+    if not imagePath.endswith("/"):
+        imagePath = imagePath + "/"
     
     fixedPath = path.replace(imagePath, "/", 1)
-    logger.debug(f"hostToGuestPath Fixed path: {path} to {fixedPath}")
     return fixedPath
 
 def guestToHostPath(imagePath: str, path: str) -> str:
@@ -51,8 +50,34 @@ def guestToHostPath(imagePath: str, path: str) -> str:
         imagePath += "/"
         
     fixedPath = path.replace("/", imagePath, 1)
-    logger.debug(f"guestToHostPath Fixed path: {path} to {fixedPath}")
     return fixedPath
+
+def resolveGuestPath(imagePath: str, path: str) -> str:
+    """
+    Resolves a path in the guest filesystem.
+    If the path is a symlink, it resolves it to its target.
+    
+    If the path does not start with the imagePath, it is assumed to be a guest path and thus corrected to the host path.
+    
+    Args:
+        imagePath (str): The root path of the image.
+        path (str): The path to resolve.
+        
+    Returns:
+        str: The resolved path.
+    """
+    if not path.startswith(imagePath):
+        path = guestToHostPath(imagePath, path)
+    
+    while os.path.islink(path):
+        linkTarget = os.readlink(path)
+        # If linkTarget is relative, it should be resolved against the current path
+        if not os.path.isabs(linkTarget):
+            linkTarget = os.path.join(os.path.dirname(path), linkTarget)
+        
+        path = guestToHostPath(imagePath, linkTarget)
+
+    return path
 
 def existsInGuest(imagePath:str, path: str) -> bool:
     """
@@ -70,9 +95,7 @@ def existsInGuest(imagePath:str, path: str) -> bool:
     if not path.startswith(imagePath):
         path = guestToHostPath(imagePath, path)
     
-    while os.path.islink(path):
-        linkTarget = os.readlink(path)
-        path = guestToHostPath(imagePath, linkTarget)
+    path = resolveGuestPath(imagePath, path)
 
     return os.path.exists(path) 
  
@@ -95,9 +118,7 @@ def isFileInGuest(imagePath:str, path: str) -> bool:
     if not path.startswith(imagePath):
         path = guestToHostPath(imagePath, path)
     
-    while os.path.islink(path):
-        linkTarget = os.readlink(path)
-        path = guestToHostPath(imagePath, linkTarget)
+    path = resolveGuestPath(imagePath, path)
     
     return os.path.isfile(path)
 
@@ -118,9 +139,7 @@ def isDirInGuest(imagePath: str, path: str) -> bool:
     if not path.startswith(imagePath):
         path = guestToHostPath(imagePath, path)
     
-    while os.path.islink(path):
-        linkTarget = os.readlink(path)
-        path = guestToHostPath(imagePath, linkTarget)
+    path = resolveGuestPath(imagePath, path)
     
     return os.path.isdir(path)
 
@@ -142,9 +161,7 @@ def isFileInGuestNotEmpty(imagePath: str, path: str) -> bool:
     if not path.startswith(imagePath):
         path = guestToHostPath(imagePath, path)
     
-    while os.path.islink(path):
-        linkTarget = os.readlink(path)
-        path = guestToHostPath(imagePath, linkTarget)
+    path = resolveGuestPath(imagePath, path)
     
     return os.path.isfile(path) and os.path.getsize(path) > 0
 
@@ -170,9 +187,7 @@ def recursiveGuestChmod(path: str, mode: int, imagePath: str, addPerms = False) 
         return
             
     # Resolve target if path is a symlink
-    while os.path.islink(path):
-        linkTarget = os.readlink(path)
-        path = guestToHostPath(imagePath, linkTarget)
+    path = resolveGuestPath(imagePath, path)
         
     if not os.path.exists(path):
         logger.warning(f"Path {path} does not exist, skipping chmod.")

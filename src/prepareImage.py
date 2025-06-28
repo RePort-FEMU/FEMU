@@ -43,9 +43,11 @@ def initFirmadyne(rootPath: str) -> None:
     logger.info("Firmadyne initialized successfully.")  
     
     
-def findInit(rootPath: str, suspectedInits: list[str]) -> list[str]:
+def validateInits(rootPath: str, suspectedInits: list[str]) -> list[str]:
     """
-    Creates the init list file in the Firmadyne root directory of the emulated image.
+    Checks if the suspected init commands exist in the image and creates a list of valid init commands.
+    This function will emit a file with the list of init commands to /firmadyne/init in the guest.
+    
     Args:
         rootPath (str): Path to the Firmadyne root directory.
         suspectedInits (list[str]): List of possible kernel init commands.
@@ -399,7 +401,7 @@ def addNvramEntries(rootPath: str) -> None:
     Raises:
         RuntimeError: If the NVRAM entries cannot be added.
     """
-    
+    logger.info("Adding NVRAM entries...")
     entries = {}
     
     if isFileInGuest(rootPath, "/sbin/rc") and findStringInBinFile(readGuestLink(guestToHostPath(rootPath, "/sbin/rc"), rootPath), "ipv6_6to4_lan_ip"):
@@ -428,15 +430,20 @@ def addNvramEntries(rootPath: str) -> None:
     nvram_override_dir = guestToHostPath(rootPath, "/firmadyne/libnvram.override")
     os.makedirs(nvram_override_dir, exist_ok=True)
     for key, value in entries.items():
+        logger.debug(f"Adding NVRAM entry: {key} = {value}")
         with open(os.path.join(nvram_override_dir, key), "w") as f:
             f.write(value)
+    
+    logger.info("NVRAM entries added successfully.")
 
 def fixFileSystem(rootPath: str) -> None:
+    logger.info("Fixing file system...")
+
     # Create links for busybox sh
     if not existsInGuest(rootPath, "/bin/sh"):
         #FirmAE diff
         # if broken symlink, remove it before creating a new one
-        if os.path.lexists(guestToHostPath(rootPath, "/bin/sh")) and not os.path.islink(guestToHostPath(rootPath, "/bin/sh")):
+        if os.path.lexists(guestToHostPath(rootPath, "/bin/sh")) and os.path.islink(guestToHostPath(rootPath, "/bin/sh")):
             os.remove(guestToHostPath(rootPath, "/bin/sh"))
         
         os.symlink("/firmadyne/busybox", guestToHostPath(rootPath, "/bin/sh"))
@@ -493,6 +500,7 @@ def fixFileSystem(rootPath: str) -> None:
         raise RuntimeError(f"Failed to add essential files: {e}")
     
     preventReboot(rootPath)
+    logger.info("File system fixed successfully.")
     
 def prepareImage(rootPath: str, possibleInits: list[str]) -> tuple[list[str], dict[str, str]] | None:
     """
@@ -518,7 +526,7 @@ def prepareImage(rootPath: str, possibleInits: list[str]) -> tuple[list[str], di
     
     initFirmadyne(rootPath)
 
-    verifiedInits = findInit(rootPath, possibleInits)
+    verifiedInits = validateInits(rootPath, possibleInits)
 
     foundServices = findServices(rootPath)
 
