@@ -522,11 +522,6 @@ def unmountImage(mountPoint: str) -> None:
     
     runAsRoot(["umount", mountPoint])
     
-    try:
-        os.rmdir(mountPoint)
-    except OSError as e:
-        raise RuntimeError(f"Failed to remove mount point directory {mountPoint}: {e}")
-    
 
 def find(searchPath: str | list[str], fileNames: str | list[str]) -> list[str]:
     """

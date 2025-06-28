@@ -3,7 +3,7 @@ import stat
 import os
 import re
 
-from util import find, findDirs, strings, findStringInBinFile
+from util import find, findDirs, strings, findStringInBinFile, mountImage, unmountImage
 
 from guestUtils import  (
     guestToHostPath, 
@@ -15,6 +15,8 @@ from guestUtils import  (
     recursiveGuestChmod,
     readGuestLink
 )
+
+from common import Architecture, Endianess
 
 logger = logging.getLogger(__name__)
 
@@ -434,7 +436,7 @@ def addNvramEntries(rootPath: str) -> None:
         with open(os.path.join(nvram_override_dir, key), "w") as f:
             f.write(value)
     
-    logger.info("NVRAM entries added successfully.")
+    logger.info(f"Added {len(entries)} NVRAM entries to {nvram_override_dir}.")
 
 def fixFileSystem(rootPath: str) -> None:
     logger.info("Fixing file system...")
@@ -502,12 +504,17 @@ def fixFileSystem(rootPath: str) -> None:
     preventReboot(rootPath)
     logger.info("File system fixed successfully.")
     
-def prepareImage(rootPath: str, possibleInits: list[str]) -> tuple[list[str], dict[str, str]] | None:
+def prepareImage(imgFilePath: str, mountPoint: str, arch: Architecture, endianess: Endianess, possibleInits: list[str] = []) -> tuple[list[str], dict[str, str]] | None:
     """
-    Prepares the image for emulation by initializing Firmadyne, finding the init commands, fixing the file system, adding vital directories as well as NVRAM entries.
+    This function mounts the image and performs necessary preparations for emulation.
+    This includes installing Firmadyne, validating init commands, finding services, fixing the file system, and adding NVRAM entries.
 
     Args:
-        rootPath (str): Path to the Firmadyne root directory.
+        imgFilePath (str): Path to the image file.
+        mountPoint (str): Path to the mount point where the image will be mounted.
+        arch (Architecture): Architecture of the image.
+        endianess (Endianess): Endianess of the image.
+        possibleInits (list[str]): List of possible kernel init commands.
 
     Returns:
         None: If the preparation fails.
@@ -517,21 +524,34 @@ def prepareImage(rootPath: str, possibleInits: list[str]) -> tuple[list[str], di
         RuntimeError: If the preparation fails.
     
     """
-    
-    logger.info("Preparing image for emulation...")
-    
-    if not os.path.exists(rootPath):
-        logger.error(f"Root path {rootPath} does not exist.")
+    if not os.path.exists(imgFilePath):
+        logger.error(f"Image file {imgFilePath} does not exist.")
         return None
     
-    initFirmadyne(rootPath)
+    if not os.path.exists(mountPoint):
+        os.makedirs(mountPoint, exist_ok=True)
+    
+    logger.info(f"Mounting image {imgFilePath} to {mountPoint}...")
+    mountImage(imgFilePath, mountPoint)
 
-    verifiedInits = validateInits(rootPath, possibleInits)
+    logger.info("Preparing image for emulation...")
 
-    foundServices = findServices(rootPath)
-
-    fixFileSystem(rootPath)
-
-    addNvramEntries(rootPath)
+    try:
+        initFirmadyne(mountPoint)
+        
+        verifiedInits = validateInits(mountPoint, possibleInits)
+        foundServices = findServices(mountPoint)
+        
+        fixFileSystem(mountPoint)
+        addNvramEntries(mountPoint)
+    
+    except Exception as e:
+        logger.error(f"Failed to prepare Image: {e}")
+        unmountImage(mountPoint)
+        return None
+    
+    logger.info("Image prepared successfully.")
+    unmountImage(mountPoint)
+    logger.info(f"Unmounted image {imgFilePath} from {mountPoint}.")
 
     return verifiedInits, foundServices

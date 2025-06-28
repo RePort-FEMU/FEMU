@@ -314,19 +314,23 @@ class Emulator:
             unmountImage(os.path.join(workDir, "mnt"))
             shutil.rmtree(os.path.join(workDir, "mnt"), ignore_errors=True)
             logger.warning("Unmounted and removed existing mount directory.")
-        
+                
         if os.path.exists(os.path.join(workDir, "raw.img")):
             logger.info("Removing existing raw image.")
             os.remove(os.path.join(workDir, "raw.img"))
             logger.info("Removed existing raw image successfully.")
             
         createRawImg(os.path.join(workDir, "raw.img"), 1 * GIGA)
+        os.makedirs(os.path.join(workDir, "mnt"), exist_ok=True)
+        
         mountImage(os.path.join(workDir, "raw.img"), os.path.join(workDir, "mnt"))
         self.extractFs(os.path.join(workDir, "mnt"))
+        unmountImage(os.path.join(workDir, "mnt"))
 
-        try:
-            prepareImage(os.path.join(workDir, "mnt"), self.inferredKernelInit)
-        except Exception as e:
-            logger.error(f"Failed to prepare image: {e}")
-            # unmountImage(os.path.join(workDir, "mnt"))
-            return
+        prepareImage(
+            os.path.join(workDir, "raw.img"),
+            os.path.join(workDir, "mnt"),
+            self.architecture,
+            self.endianess,
+            self.inferredKernelInit
+        )
