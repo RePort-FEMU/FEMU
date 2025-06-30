@@ -1,12 +1,15 @@
 
-all: build mountimg unmountimg
+all: build addPartition mountPartition unmountimg
 
 # If the build directory does not exist, create it
 build:
 	mkdir -p build
 
-mountimg: build
-	g++ -o build/mountImg mountImg.cpp
+addPartition: build
+	g++ -o build/addPartition addPartition.cpp
+
+mountPartition: build
+	g++ -o build/mountPartition mountPartition.cpp
 
 unmountimg: build
 	g++ -o build/umountImg umountImg.cpp

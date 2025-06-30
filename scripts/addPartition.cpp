@@ -9,20 +9,18 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>       
-#include <sys/mount.h>
 
 int main(int argc, char *argv[]) {
     if (geteuid() != 0) {
         std::cerr << "This program must be run as root." << std::endl;
         return 1;
     }
-    if (argc != 3) {
-        std::cerr << "Usage: " << argv[0] << " <image_file> <mount_point>" << std::endl;
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <image_file>" << std::endl;
         return 1;
     }
 
     const char *imageFile = argv[1];
-    const char *mountPoint = argv[2];
 
     int loopCtrlFd = open("/dev/loop-control", O_RDWR);
     if (loopCtrlFd < 0) {
@@ -36,6 +34,7 @@ int main(int argc, char *argv[]) {
         close(loopCtrlFd);
         return 1;
     }
+    close(loopCtrlFd);
     
     std::string loopPath = "/dev/loop" + std::to_string(loopDevice);
     int loopFd = open(loopPath.c_str(), O_RDWR);
@@ -65,6 +64,7 @@ int main(int argc, char *argv[]) {
     struct loop_info64 loopInfo;
     memset(&loopInfo, 0, sizeof(loopInfo));
     strncpy(reinterpret_cast<char*>(loopInfo.lo_file_name), imageFile, LO_NAME_SIZE - 1);
+    loopInfo.lo_flags = LO_FLAGS_PARTSCAN;
 
     if (ioctl(loopFd, LOOP_SET_STATUS64, &loopInfo) < 0) {
         perror("Failed to set loop device info");
@@ -75,25 +75,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-
-    if (mount(loopPath.c_str(), mountPoint, "ext2", 0, nullptr) < 0) {
-        perror("Failed to mount loop device");
-        std::cerr << "Error code: " << errno << " (" << std::strerror(errno) << ")" << std::endl;
-        ioctl(loopFd, LOOP_CLR_FD, 0);
-        close(imgFd);
-        close(loopFd);
-        close(loopCtrlFd);
-        return 1;
-    }
-
-    std::cout << "Mounted " << imageFile << " on " << mountPoint << std::endl;
     std::cout << "Loop device: " << loopPath << std::endl;
 
     // Cleanup
-    ioctl(loopFd, LOOP_CLR_FD, 0);
+    // ioctl(loopFd, LOOP_CLR_FD, 0);
     close(imgFd);
     close(loopFd);
-    close(loopCtrlFd);
 
     return 0;
 }
