@@ -440,7 +440,7 @@ def createRawImg(path: str, size: int) -> str:
     # Add a ext2 filesystem to the raw image
     try:
         subprocess.run(
-            ["mke2fs", "-E", "root_owner=1000:1000", path], 
+            ["mke2fs", "-E", "root_owner=1000:1000,offset=1048576", path], 
             text=True,
             check=True,
             capture_output=True,
@@ -501,7 +501,16 @@ def mountImage(rawImagePath: str, mountPoint: str) -> None:
     if not os.access(mountPoint, os.W_OK):
         raise PermissionError(f"Mount point {mountPoint} is not writable.")
 
-    runAsRoot(["mount", rawImagePath, mountPoint])
+    runAsRoot(["losetup", "-Pf", rawImagePath]) 
+    
+    # Find the loop device associated with the raw image
+    loopDevices = subprocess.run(["sudo", "losetup", "-j", rawImagePath], capture_output=True, text=True)
+    if loopDevices.returncode != 0:
+        raise RuntimeError(f"Failed to find loop device for {rawImagePath}: {loopDevices.stderr.strip()}")
+    
+    loopDevice = loopDevices.stdout.split("\n")[0].split(":")[0].strip() + "p1"  # Assuming the first partition is to be mounted
+
+    runAsRoot(["mount", loopDevice, mountPoint])
     
     
 def unmountImage(mountPoint: str) -> None:
