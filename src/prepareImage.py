@@ -1,4 +1,5 @@
 import logging
+import shutil
 import stat
 import os
 import re
@@ -504,7 +505,82 @@ def fixFileSystem(rootPath: str) -> None:
     preventReboot(rootPath)
     logger.info("File system fixed successfully.")
     
-def prepareImage(imgFilePath: str, mountPoint: str, arch: Architecture, endianess: Endianess, possibleInits: list[str] = []) -> tuple[list[str], dict[str, str]] | None:
+def intallFirmadyne(rootPath: str, firmadyneScriptsPath: str) -> None:
+    """
+    Installs Firmadyne scripts to the image.
+    
+    Args:
+        rootPath (str): Path to the Firmadyne root directory.
+        binariesPath (str): Path to the directory containing architecture-specific binaries.
+        firmadyneScriptsPath (str): Path to the directory containing Firmadyne scripts.
+        
+    Raises:
+        RuntimeError: If the installation fails.
+    """
+    
+    if not os.path.exists(firmadyneScriptsPath):
+        logger.error(f"Firmadyne scripts path {firmadyneScriptsPath} does not exist.")
+        raise RuntimeError(f"Firmadyne scripts path {firmadyneScriptsPath} does not exist.")
+    
+    # Copy Firmadyne scripts
+    for item in os.listdir(firmadyneScriptsPath):
+        src = os.path.join(firmadyneScriptsPath, item)
+        if not os.path.isfile(src):
+            continue
+        
+        if not "injectionChecker.sh" in item:
+            dst = os.path.join(rootPath, "firmadyne", item)
+        else:
+            dst = os.path.join(rootPath, "bin", "a")
+        
+        shutil.copy(src, dst)
+        os.chmod(dst, os.stat(dst).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)  # Make the script executable
+
+    
+    logger.info("Firmadyne installation completed successfully.")
+    
+def copyBinaries(rootPath: str, binariesPath: str, arch: Architecture, endianess: Endianess) -> None:
+    """
+    Copies architecture-specific binaries to the image.
+    
+    Args:
+        rootPath (str): Path to the Firmadyne root directory.
+        binariesPath (str): Path to the directory containing architecture-specific binaries.
+        arch (Architecture): Architecture of the image.
+        endianess (Endianess): Endianess of the image.
+        
+    Raises:
+        RuntimeError: If the binary copy fails.
+    """
+    
+    if not os.path.exists(binariesPath):
+        logger.error(f"Binaries path {binariesPath} does not exist.")
+        raise RuntimeError(f"Binaries path {binariesPath} does not exist.")
+    
+    binarySuffix = f".{str(arch)}{str(endianess)}"
+    
+    
+    for item in os.listdir(binariesPath):
+        if not item.endswith(binarySuffix):
+            continue
+        
+        if item.startswith("vmlinux") or item.startswith("zImage"):
+            continue
+        
+        src = os.path.join(binariesPath, item)
+        if not os.path.isfile(src):
+            logger.warning(f"Skipping {src}, not a file.")
+            continue
+        
+        targetName = item.replace(binarySuffix, "")
+        dst = os.path.join(rootPath, "firmadyne", targetName)
+        
+        shutil.copy(src, dst)
+        os.chmod(dst, os.stat(dst).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)  # Make the binary executable
+    
+    logger.info("Architecture-specific binaries copied successfully.")
+    
+def prepareImage(imgFilePath: str, mountPoint: str, arch: Architecture, endianess: Endianess, binariesPath:str, firmadyneScriptsPath:str, possibleInits: list[str] = []) -> tuple[list[str], dict[str, str]] | None:
     """
     This function mounts the image and performs necessary preparations for emulation.
     This includes installing Firmadyne, validating init commands, finding services, fixing the file system, and adding NVRAM entries.
@@ -514,6 +590,8 @@ def prepareImage(imgFilePath: str, mountPoint: str, arch: Architecture, endianes
         mountPoint (str): Path to the mount point where the image will be mounted.
         arch (Architecture): Architecture of the image.
         endianess (Endianess): Endianess of the image.
+        binariesPath (str): Path to the directory containing architecture-specific binaries.
+        firmadyneScriptsPath (str): Path to the directory containing Firmadyne scripts.
         possibleInits (list[str]): List of possible kernel init commands.
 
     Returns:
@@ -526,6 +604,13 @@ def prepareImage(imgFilePath: str, mountPoint: str, arch: Architecture, endianes
     """
     if not os.path.exists(imgFilePath):
         logger.error(f"Image file {imgFilePath} does not exist.")
+        return None
+    
+    if not os.path.exists(binariesPath):
+        logger.warning(f"Binaries path {binariesPath} does not exist. No binaries will be installed.")
+    
+    if not os.path.exists(firmadyneScriptsPath):
+        logger.error(f"Firmadyne scripts path {firmadyneScriptsPath} does not exist.")
         return None
     
     if not os.path.exists(mountPoint):
@@ -544,6 +629,9 @@ def prepareImage(imgFilePath: str, mountPoint: str, arch: Architecture, endianes
         
         fixFileSystem(mountPoint)
         addNvramEntries(mountPoint)
+        
+        intallFirmadyne(mountPoint, firmadyneScriptsPath)
+        copyBinaries(mountPoint, binariesPath, arch, endianess)
     
     except Exception as e:
         logger.error(f"Failed to prepare Image: {e}")

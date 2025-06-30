@@ -332,5 +332,7 @@ class Emulator:
             os.path.join(workDir, "mnt"),
             self.architecture,
             self.endianess,
+            self.config.binariesPath,
+            os.path.join(self.config.scriptsPath, "firmadyne"),
             self.inferredKernelInit
         )
