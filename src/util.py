@@ -510,6 +510,8 @@ def mountImage(rawImagePath: str, mountPoint: str) -> None:
 
     runAsRoot(["mount", loopDevice, mountPoint])
     
+    os.sync()  # Ensure the mount is complete before returning
+    
     
 def unmountImage(mountPoint: str) -> None:
     """
