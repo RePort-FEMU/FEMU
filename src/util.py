@@ -5,6 +5,7 @@ import tarfile
 import shutil
 import string
 import os
+import re
 
 from common import Architecture, Endianess
 
@@ -474,6 +475,19 @@ def runAsRoot(command: list[str]) -> subprocess.CompletedProcess:
     
     return result
 
+def addPartition(rawImagePath: str) -> str:
+    runAsRoot(["losetup", "-Pf", rawImagePath]) 
+    
+    # Find the loop device associated with the raw image
+    loopDevices = runAsRoot(["losetup", "-j", rawImagePath]).stdout.strip()
+
+    loopDevice = loopDevices.split("\n")[0].split(":")[0].strip() + "p1"  # Assuming the first partition is to be mounted
+
+    if not os.path.exists(loopDevice):
+        raise RuntimeError(f"Loop device {loopDevice} does not exist. Please check the raw image path and try again.")
+
+    return loopDevice
+
 def mountImage(rawImagePath: str, mountPoint: str) -> None:
     """
     Mounts a raw image file to a specified mount point.
@@ -501,17 +515,26 @@ def mountImage(rawImagePath: str, mountPoint: str) -> None:
     if not os.access(mountPoint, os.W_OK):
         raise PermissionError(f"Mount point {mountPoint} is not writable.")
 
-    runAsRoot(["losetup", "-Pf", rawImagePath]) 
-    
-    # Find the loop device associated with the raw image
-    loopDevices = runAsRoot(["losetup", "-j", rawImagePath]).stdout.strip()
-
-    loopDevice = loopDevices.split("\n")[0].split(":")[0].strip() + "p1"  # Assuming the first partition is to be mounted
+    loopDevice = addPartition(rawImagePath)
 
     runAsRoot(["mount", loopDevice, mountPoint])
     
     os.sync()  # Ensure the mount is complete before returning
     
+def removePartition(loopDevice: str) -> None:
+    """
+    Removes the partition from a raw image file.
+
+    Args:
+        loopDevice (str): The loop device associated with the partition.
+    """
+    if not os.path.exists(loopDevice):
+        raise FileNotFoundError(f"Loop device {loopDevice} does not exist.")
+
+    if re.match(r'^/dev/loop\d+p\d+$', loopDevice):
+        loopDevice = loopDevice[:-2]  # Remove partition number if present
+
+    runAsRoot(["losetup", "-d", loopDevice])
     
 def unmountImage(mountPoint: str) -> None:
     """
@@ -529,8 +552,24 @@ def unmountImage(mountPoint: str) -> None:
     if not os.path.isdir(mountPoint):
         raise ValueError(f"Mount point {mountPoint} is not a directory.")
     
+    # Find the loop device associated with the mount point by checking /proc/mounts
+    with open("/proc/mounts", "r") as mountsFile:
+        mounts = mountsFile.readlines()
+
+    for line in mounts:
+        if mountPoint in line:
+            loopDevice = line.split()[0]
+            break
+    else:
+        raise RuntimeError(f"Failed to find loop device for mount point {mountPoint}")
+    if not loopDevice:
+        raise RuntimeError(f"No loop device found for mount point {mountPoint}")
+    
+    # Unmount the mount point
     runAsRoot(["umount", mountPoint])
     
+    removePartition(loopDevice)
+
 
 def find(searchPath: str | list[str], fileNames: str | list[str]) -> list[str]:
     """
