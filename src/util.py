@@ -504,11 +504,9 @@ def mountImage(rawImagePath: str, mountPoint: str) -> None:
     runAsRoot(["losetup", "-Pf", rawImagePath]) 
     
     # Find the loop device associated with the raw image
-    loopDevices = subprocess.run(["sudo", "losetup", "-j", rawImagePath], capture_output=True, text=True)
-    if loopDevices.returncode != 0:
-        raise RuntimeError(f"Failed to find loop device for {rawImagePath}: {loopDevices.stderr.strip()}")
-    
-    loopDevice = loopDevices.stdout.split("\n")[0].split(":")[0].strip() + "p1"  # Assuming the first partition is to be mounted
+    loopDevices = runAsRoot(["losetup", "-j", rawImagePath]).stdout.strip()
+
+    loopDevice = loopDevices.split("\n")[0].split(":")[0].strip() + "p1"  # Assuming the first partition is to be mounted
 
     runAsRoot(["mount", loopDevice, mountPoint])
     
