@@ -480,6 +480,9 @@ def addPartition(rawImagePath: str) -> str:
     
     # Find the loop device associated with the raw image
     loopDevices = runAsRoot(["losetup", "-j", rawImagePath]).stdout.strip()
+    
+    if not loopDevices.strip():
+        raise RuntimeError(f"No loop device found for raw image {rawImagePath}. Please check the raw image path and try again.")
 
     loopDevice = loopDevices.split("\n")[0].split(":")[0].strip() + "p1"  # Assuming the first partition is to be mounted
 
@@ -665,3 +668,37 @@ def findStringInBinFile(filePath: str, searchString: str) -> bool:
         if searchString in stringFound:
             return True
     return False
+
+def runFsck(rawImagePath: str) -> None:
+    """
+    Runs fsck on a mounted raw image file.
+    
+    Args:
+        rawImagePath (str): Path to the raw image file.
+        mountPoint (str): Directory where the image is mounted.
+    
+    Raises:
+        RuntimeError: If fsck fails.
+    """
+    if not os.path.exists(rawImagePath):
+        raise FileNotFoundError(f"Raw image file {rawImagePath} does not exist.")
+    
+    # Check that the raw image is not mounted or used by any other loop device
+    loopDevice = runAsRoot(["losetup", "-j", rawImagePath]).stdout.strip()
+    
+    if loopDevice:
+        loopDevice = loopDevice.split("\n")[0].split(":")[0].strip()
+        if os.path.exists(loopDevice):
+            raise RuntimeError(f"Raw image {rawImagePath} is currently mounted or used by a loop device {loopDevice}. Please unmount it before running fsck.")
+
+    dev = addPartition(rawImagePath)
+
+    try:
+        runAsRoot(["e2fsck", "-y", dev])
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to run fsck on raw image {rawImagePath}: {e}")
+    
+    finally:
+        removePartition(dev)
+        
+        

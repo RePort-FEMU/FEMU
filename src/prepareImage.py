@@ -4,7 +4,7 @@ import stat
 import os
 import re
 
-from util import find, findDirs, strings, findStringInBinFile, mountImage, unmountImage
+from util import find, findDirs, strings, findStringInBinFile, mountImage, unmountImage, runFsck
 
 from guestUtils import  (
     guestToHostPath, 
@@ -641,5 +641,7 @@ def prepareImage(imgFilePath: str, mountPoint: str, arch: Architecture, endianes
     logger.info("Image prepared successfully.")
     unmountImage(mountPoint)
     logger.info(f"Unmounted image {imgFilePath} from {mountPoint}.")
+
+    runFsck(imgFilePath)
 
     return verifiedInits, foundServices
