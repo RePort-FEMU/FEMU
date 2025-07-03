@@ -638,10 +638,11 @@ def prepareImage(imgFilePath: str, mountPoint: str, arch: Architecture, endianes
         unmountImage(mountPoint)
         return None
     
-    logger.info("Image prepared successfully.")
     unmountImage(mountPoint)
-    logger.info(f"Unmounted image {imgFilePath} from {mountPoint}.")
 
+    logger.info("Running fsck on the image...")
     runFsck(imgFilePath)
+    
+    logger.info("Image preparation completed successfully.")
 
     return verifiedInits, foundServices
