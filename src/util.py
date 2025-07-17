@@ -535,7 +535,7 @@ def removePartition(loopDevice: str) -> None:
         raise FileNotFoundError(f"Loop device {loopDevice} does not exist.")
 
     if re.match(r'^/dev/loop\d+p\d+$', loopDevice):
-        loopDevice = loopDevice[:-2]  # Remove partition number if present
+        loopDevice = loopDevice.rsplit("p", 1)[0]  # Remove partition suffix if present
 
     runAsRoot(["losetup", "-d", loopDevice])
     

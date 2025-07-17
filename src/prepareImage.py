@@ -103,6 +103,7 @@ def validateInits(rootPath: str, suspectedInits: list[str]) -> list[str]:
             
         # If file does not exist, or symlink is broken, try to locate it 
         filename = os.path.basename(init)
+        
         # TODO: Dereference possible symlinks
         possibleLocations = [guestToHostPath(rootPath, loc) for loc in ["/bin", "/sbin", "/usr/bin", "/usr/sbin"]]
         results = find(possibleLocations, filename)
@@ -212,7 +213,7 @@ def findServices(rootPath: str) -> dict[str, str]:
             name = "boa"
             startCommand = "/bin/boa"
 
-    if existsInGuest(rootPath, "/usr/sbin/lighttpd"):
+    if existsInGuest(rootPath, "/usr/sbin/lighttpd"): # for Ubiquiti firmwares
         services["/usr/sbin/lighttpd"] = "/usr/sbin/lighttpd -f /etc/lighttpd/lighttpd.conf"
         if not found:
             found = True
