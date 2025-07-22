@@ -22,6 +22,7 @@ from util import (
 )
 
 from prepareImage import prepareImage
+from preEmulator import PreEmulator
 
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'extractor'))
@@ -60,9 +61,7 @@ class Emulator:
         self.kernelVersion = ""
         self.kernelVersionString = ""
         self.inferredKernelInit = []
-        self.inferredKernelInitStrings = []
-        self.verifiedInits = []
-        
+        self.inferredKernelInitStrings = []        
           
     def createDirectories(self):
         # Create necessary directories for images and scratch space
@@ -327,7 +326,7 @@ class Emulator:
         self.extractFs(os.path.join(workDir, "mnt"))
         unmountImage(os.path.join(workDir, "mnt"))
 
-        prepareImage(
+        res = prepareImage(
             os.path.join(workDir, "raw.img"),
             os.path.join(workDir, "mnt"),
             self.architecture,
@@ -336,3 +335,11 @@ class Emulator:
             os.path.join(self.config.scriptsPath, "firmadyne"),
             self.inferredKernelInit
         )
+        
+        if not res:
+            logger.error("Failed to prepare image for emulation.")
+            return
+        
+        foundInits, foundServices = res
+        PreEmulator(os.path.join(workDir, "raw.img"), foundInits, len(foundServices) > 0, self.architecture, self.endianess, os.path.join(workDir, "mnt"), workDir).start()
+        
