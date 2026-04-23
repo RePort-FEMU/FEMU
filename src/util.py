@@ -75,51 +75,51 @@ def checkArch(tarballPath: str, tempDirID: str) -> tuple[Architecture, Endianess
     Raises:
         RuntimeError: If the tarball cannot be read or if no executables are found."""
 
-    tar = tarfile.open(tarballPath, "r")
+    with tarfile.open(tarballPath, "r") as tar:
     
-    executables = []
-    for member in tar.getmembers():
-        if member.isfile():
-            if any([member.name.find(binary) != -1 for binary in ["/busybox", "/alphapd", "/boa", "/http", "/hydra", "/helia", "/webs"]]):
-                executables.append(member)
-            elif any([member.name.find(path) != -1 for path in ["/sbin/", "/bin/"]]):
-                executables.append(member)
-    
-    try:
-        os.mkdir(os.path.join("/tmp", tempDirID))
-    except FileExistsError:
-        # Check that the user has permission to write to the directory
-        if not os.access(os.path.join("/tmp", tempDirID), os.W_OK):
-            raise PermissionError(f"Temporary directory {tempDirID} already exists and is not writable.")
-        shutil.rmtree(os.path.join("/tmp", tempDirID))
-        os.mkdir(os.path.join("/tmp", tempDirID))
-    except Exception as e:
-        raise RuntimeError(f"Failed to create temporary directory: {e}")
-    
-    arch = Architecture.UNKNOWN
-    endianess = Endianess.UNKNOWN
-    
-    for executable in executables:
-        tar.extract(executable, path=os.path.join("/tmp", tempDirID))
-        filePath = os.path.join("/tmp", tempDirID, executable.name)
-        filetype = subprocess.check_output(["file", filePath]).decode("utf-8")
+        executables = []
+        for member in tar.getmembers():
+            if member.isfile():
+                if any([member.name.find(binary) != -1 for binary in ["/busybox", "/alphapd", "/boa", "/http", "/hydra", "/helia", "/webs"]]):
+                    executables.append(member)
+                elif any([member.name.find(path) != -1 for path in ["/sbin/", "/bin/"]]):
+                    executables.append(member)
         
-        for arch in Architecture:
-            if arch.identifier() in filetype:
-                arch = arch
-                break
+        try:
+            os.mkdir(os.path.join("/tmp", tempDirID))
+        except FileExistsError:
+            # Check that the user has permission to write to the directory
+            if not os.access(os.path.join("/tmp", tempDirID), os.W_OK):
+                raise PermissionError(f"Temporary directory {tempDirID} already exists and is not writable.")
+            shutil.rmtree(os.path.join("/tmp", tempDirID))
+            os.mkdir(os.path.join("/tmp", tempDirID))
+        except Exception as e:
+            
+            raise RuntimeError(f"Failed to create temporary directory: {e}")
+        
+        arch = Architecture.UNKNOWN
+        endianess = Endianess.UNKNOWN
+        
+        for executable in executables:
+            tar.extract(executable, path=os.path.join("/tmp", tempDirID))
+            filePath = os.path.join("/tmp", tempDirID, executable.name)
+            filetype = subprocess.check_output(["file", filePath]).decode("utf-8") #TODO: use python-magic instead of calling file command
+            
+            for a in Architecture:
+                if a.identifier() in filetype:
+                    arch = a
+                    break
 
-        for endian in Endianess:
-            if endian.identifier() in filetype:
-                endianess = endian
+            for endian in Endianess:
+                if endian.identifier() in filetype:
+                    endianess = endian
+                    break
+                
+            if arch != Architecture.UNKNOWN and endianess != Endianess.UNKNOWN:
                 break
             
-        if arch != Architecture.UNKNOWN and endianess != Endianess.UNKNOWN:
-            break
-        
-    # Clean up the temporary directory
-    tar.close()
-    shutil.rmtree(os.path.join("/tmp", tempDirID))
+        # Clean up the temporary directory
+        shutil.rmtree(os.path.join("/tmp", tempDirID))
 
     return arch, endianess
 
@@ -236,10 +236,9 @@ def getObjectIds(fileList: list[tuple[str, str, int, int, int]] | list[str], dbI
     else:
         raise TypeError("fileList must be a list of tuples or a list of strings.")
     
-    hashesStr = ",".join(f"""'{hash}'""" for hash in hashes)
-    query = """SELECT id,hash FROM object WHERE hash IN (%s)"""
+    
     with DBInterface(dbIp, dbPort) as cursor:
-        cursor.execute(query, (hashesStr,))
+        cursor.execute("SELECT id,hash FROM object WHERE hash IN %s", (tuple(hashes),))
         results = cursor.fetchall()
         objectIds = {row[1]: row[0] for row in results}
         
@@ -466,7 +465,7 @@ def runAsRoot(command: list[str]) -> subprocess.CompletedProcess:
         RuntimeError: If the command fails.
     """
     try:
-        result = subprocess.run(["sudo"] + command, check=True, capture_output=True, text=True)
+        result = subprocess.run(["sudo"] + command, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Failed to run command as root: {e}")
     
@@ -695,7 +694,7 @@ def runFsck(rawImagePath: str) -> None:
 
     try:
         runAsRoot(["e2fsck", "-y", dev])
-    except subprocess.CalledProcessError as e:
+    except RuntimeError as e:
         raise RuntimeError(f"Failed to run fsck on raw image {rawImagePath}: {e}")
     
     finally:

@@ -48,6 +48,8 @@ class Emulator:
             else:
                 logger.warning("Brand detection is set to 'auto', but no database IP provided. Defaulting to 'unknown'.")
                 self.brand = "unknown"
+        else:
+            self.brand = self.config.brand
                 
         # Information about the firmware image
         self.iid = None
@@ -188,6 +190,10 @@ class Emulator:
             if "Linux version" in string:
                 temp = string.split("Linux version ")[1].split(" ")[0]
                 if temp:
+                    if self.kernelVersion and self.kernelVersion != temp:
+                        logger.warning(f"Multiple kernel version strings found: {self.kernelVersion} and {temp}. Using the first one.")
+                        continue
+                    
                     self.kernelVersion = temp
                     self.kernelVersionString = string
                     logger.debug(f"Found kernel version: {self.kernelVersion}")
@@ -247,6 +253,8 @@ class Emulator:
 
         linkInfo = getLinksInfo(self.filesystemPath)
         insertLinksToImage(self.iid, linkInfo, self.config.sqlIP, self.config.sqlPort)
+        
+        return True
         
     def getWorkDir(self) -> str:
         if not self.iid:
@@ -322,7 +330,7 @@ class Emulator:
         os.makedirs(os.path.join(workDir, "mnt"), exist_ok=True)
         
         mountImage(os.path.join(workDir, "raw.img"), os.path.join(workDir, "mnt"))
-        self.extractFs(os.path.join(workDir, "mnt"))
+        self.extractFs(os.path.join(workDir, "mnt")) #TODO Possible leak here. Check return
         unmountImage(os.path.join(workDir, "mnt"))
 
         res = prepareImage(

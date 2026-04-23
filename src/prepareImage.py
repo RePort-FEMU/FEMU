@@ -116,7 +116,7 @@ def validateInits(rootPath: str, suspectedInits: list[str]) -> list[str]:
                 
             os.symlink(hostToGuestPath(rootPath, linkTarget), initHostPath)
             foundInits.append(init)
-            logging.debug(f"Fixed file {init} by creating a symlink to {linkTarget}.")
+            logger.debug(f"Fixed file {init} by creating a symlink to {linkTarget}.")
             continue
         
         # FIRMAE diff
@@ -133,7 +133,7 @@ def validateInits(rootPath: str, suspectedInits: list[str]) -> list[str]:
 
                 os.symlink(hostToGuestPath(rootPath, linkTarget), initHostPath)
                 foundInits.append(init)
-                logging.debug(f"Fixed file {init} by creating a symlink to {linkTarget}.")
+                logger.debug(f"Fixed file {init} by creating a symlink to {linkTarget}.")
                 continue
             
     if len(foundInits) == 0:
@@ -451,7 +451,9 @@ def fixFileSystem(rootPath: str) -> None:
             os.remove(guestToHostPath(rootPath, "/bin/sh"))
         
         os.symlink("/firmadyne/busybox", guestToHostPath(rootPath, "/bin/sh"))
-    os.symlink("/firmadyne/busybox", guestToHostPath(rootPath, "/firmadyne/sh"))
+        
+    if not existsInGuest(rootPath, "/firmadyne/sh"):
+        os.symlink("/firmadyne/busybox", guestToHostPath(rootPath, "/firmadyne/sh"))
 
     dirsToCreate = [
         "/proc",

@@ -5,14 +5,19 @@ from typing import Optional
 
 logger = logging.getLogger("FEMU")
 
+# TODO: Make these configurable
+USERNAME = "femu"
+PASSWORD = "femu"
+DBNAME = "firmware"
+
 def checkConnection(host:str, port:int) -> bool:
     conn = None
     ret = True
     try:
         conn = psycopg2.connect(
-            dbname="firmware",
-            user="femu",
-            password="femu",
+            dbname=DBNAME,
+            user=USERNAME,
+            password=PASSWORD,
             host=host,
             port=port
         )
@@ -36,9 +41,9 @@ class DBInterface:
     def connect(self) -> Optional[psycopg2.extensions.cursor]:
         try:
             self.conn = psycopg2.connect(
-                dbname="firmware",
-                user="femu",
-                password="femu",
+                dbname=DBNAME,
+                user=USERNAME,
+                password=PASSWORD,
                 host=self.host,
                 port=self.port
             )
