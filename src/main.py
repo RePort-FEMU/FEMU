@@ -7,10 +7,17 @@ from dbInterface import checkConnection
 from emulator import Emulator
 from emulatorConfig import emulatorConfig
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(filename)s - %(message)s'
-)
+logger = logging.getLogger("FEMU")
+
+logger.setLevel(logging.DEBUG)
+formater = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger.addHandler(logging.StreamHandler())
+logger.handlers[0].setFormatter(formater)
+
+extractorLogger = logging.getLogger("femu_extractor")
+extractorLogger.setLevel(logging.DEBUG)
+extractorLogger.addHandler(logging.StreamHandler())
+extractorLogger.handlers[0].setFormatter(formater)
 
 def parseArguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FEMU: A tool for emulating and analyzing firmware.")
@@ -28,25 +35,25 @@ def parseArguments() -> argparse.Namespace:
 
 def checkArguments(args: argparse.Namespace):
     if args.sql is None:
-        logging.warning("No PostgreSQL IP provided. Some features may not work.")
+        logger.warning("No PostgreSQL IP provided. Some features may not work.")
     else:
         # Check connection to PostgreSQL database
         if checkConnection(args.sql, args.port):
-            logging.info("Successfully connected to PostgreSQL database.")
+            logger.info("Successfully connected to PostgreSQL database.")
         else:
-            logging.error("Failed to connect to PostgreSQL database.")
+            logger.error("Failed to connect to PostgreSQL database.")
             exit(1)
             
     if not os.path.exists(args.input):
-        logging.error(f"Input path '{args.input}' does not exist.")
+        logger.error(f"Input path '{args.input}' does not exist.")
         exit(1)
         
     if not os.path.exists(args.output):
         try:
             os.makedirs(args.output)
-            logging.info(f"Output directory '{args.output}' created.")
+            logger.info(f"Output directory '{args.output}' created.")
         except Exception as e:
-            logging.error(f"Failed to create output directory '{args.output}': {e}")
+            logger.error(f"Failed to create output directory '{args.output}': {e}")
             exit(1)
 
 def main():
@@ -69,7 +76,7 @@ def main():
             sqlIP=args.sql,
             sqlPort=args.port
         ))
-        logging.info(f"Initialized emulator for {inputFile} in mode {args.mode} with brand {args.brand}.")
+        logger.info(f"Initialized emulator for {inputFile} in mode {args.mode} with brand {args.brand}.")
         
         em.run()
     

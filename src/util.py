@@ -11,7 +11,7 @@ from common import Architecture, Endianess
 
 from dbInterface import DBInterface
 
-logger = logging.getLogger("emulator")
+logger = logging.getLogger("FEMU")
 
 def checkCompatibility(arch: Architecture, endianess: Endianess) -> bool:
     """

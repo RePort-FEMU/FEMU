@@ -5,7 +5,7 @@ from common import RunningMode
 from dbInterface import checkConnection
 
 # Use the root logger, do not set up a separate logger or handler here.
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("FEMU")
 
 class emulatorConfig:
     def __init__(self,

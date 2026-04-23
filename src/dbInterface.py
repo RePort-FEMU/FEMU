@@ -3,7 +3,7 @@ import logging
 
 from typing import Optional
 
-logger = logging.getLogger("emulator")
+logger = logging.getLogger("FEMU")
 
 def checkConnection(host:str, port:int) -> bool:
     conn = None

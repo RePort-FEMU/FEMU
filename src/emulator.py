@@ -25,10 +25,9 @@ from prepareImage import prepareImage
 from preEmulator import PreEmulator
 
 
-sys.path.append(os.path.join(os.path.dirname(__file__), 'extractor'))
-from extractor.extractor import extract
+from femu_extractor import extract
 # Use the root logger, do not set up a separate logger or handler here.
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("FEMU")
 
 class Emulator:
     def __init__(self, config: emulatorConfig):

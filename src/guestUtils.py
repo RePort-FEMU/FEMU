@@ -1,7 +1,7 @@
 import logging
 import os
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("FEMU")
 
 def hostToGuestPath(imagePath: str, path: str) -> str:
     """
