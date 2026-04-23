@@ -5,11 +5,11 @@ import os
 from common import Architecture, Endianess
 
 class Qemu:
-    def __init__(self, imagePath: str, arch: Architecture, endiannes: Endianess, workDir: str = "", kernelDir: str = ""):
+    def __init__(self, imagePath: str, arch: Architecture, endiannes: Endianess, kernel: str, workDir: str = ""):
         self.imagePath = imagePath
         self.architecture = arch
         self.endiannes = endiannes
-        self.kernelDir = kernelDir
+        self.kernelPath = kernel
         
         if workDir:
             self.workDir = workDir
@@ -19,7 +19,7 @@ class Qemu:
         self.tempdir = tempfile.mkdtemp(prefix="femu-qemu-", dir="/tmp")
 
     # TODO: Fix This
-    def _buildCommand(self, initArg: str):
+    def _buildCommand(self, initArg: str, logFileName: str = "qemu.serial.log") -> list[str]:
         cmd = []
         
         # Emulator
@@ -39,12 +39,7 @@ class Qemu:
             cmd.extend(["-M", "malta"])
             
         # Kernel
-        if self.architecture == Architecture.ARM:
-            cmd.extend(["-kernel", os.path.join(self.kernelDir, "zImage.armel")])  # Kernel image
-        elif self.architecture == Architecture.MIPS and self.endiannes == Endianess.BIG:
-            cmd.extend(["-kernel", os.path.join(self.kernelDir, "vmlinux.mipseb.4")]) # Kernel image for big-endian MIPS
-        elif self.architecture == Architecture.MIPS and self.endiannes == Endianess.LITTLE:
-            cmd.extend(["-kernel", os.path.join(self.kernelDir, "vmlinux.mipsel.4")])
+        cmd.extend(["-kernel", self.kernelPath])
             
         # Root filesystem
         if self.architecture == Architecture.ARM:
@@ -59,9 +54,8 @@ class Qemu:
         cmd.append("-append")
         cmd.append(f"firmadyne.syscall=27 root={rootDev} console=ttyS0 nandsim.parts=64,64,64,64,64,64,64,64,64,64 {initArg} rw debug ignore_loglevel print-fatal-signals=1 FIRMAE_NET=true FIRMAE_NVRAM=true FIRMAE_KERNEL=true FIRMAE_ETC=true user_debug=31")
             
-            
         # Serial output
-        cmd.extend(["-serial", f"file:{self.workDir}/qemu.initial.serial.log"])
+        cmd.extend(["-serial", f"file:{os.path.join(self.workDir, logFileName)}"])
         cmd.extend(["-serial", f"unix:{os.path.join(self.tempdir, 'qemu.S1')},server,nowait"])
         
         # Monitor
@@ -85,11 +79,11 @@ class Qemu:
                 
         return cmd
     
-    def run(self, initArg: str, timeout: int = 300):
+    def run(self, initArg: str, logFileName: str = "qemu.serial.log", timeout: int = 300):
         """
         Run the QEMU emulator with the specified init argument.
         """
-        cmd = self._buildCommand(initArg)
+        cmd = self._buildCommand(initArg, logFileName)
         
         # Execute the command
         try:
