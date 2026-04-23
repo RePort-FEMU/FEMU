@@ -1,0 +1,2 @@
+femu-extractor @ git+https://github.com/RePort-FEMU/extractor@397e40149c330ef8d3ed46d8bd0fd159340bd9d6
+psycopg2-binary==2.9.10

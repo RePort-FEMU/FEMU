@@ -127,23 +127,6 @@ else
     print_msg success "Python virtual environment created successfully."
 fi
 
-# Install the extractor package
-if [ -d "$REPO_ROOT/src/extractor" ]; then
-    print_msg info "Installing extractor package..."
-    source "$REPO_ROOT/.venv/bin/activate"
-    cd "$REPO_ROOT/src/extractor" || exit 1
-
-    ./install.sh
-    if [ $? -ne 0 ]; then
-        print_msg fail "Failed to install extractor package."
-        deactivate
-        exit 1
-    fi
-    deactivate
-else
-    print_msg fail "Extractor package directory not found: $REPO_ROOT/src/extractor"
-    exit 1
-fi
 
 # Activate the virtual environment and install requirements
 if [ -f "$REPO_ROOT/requirements.txt" ]; then
