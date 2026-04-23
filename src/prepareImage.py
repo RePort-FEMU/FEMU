@@ -19,7 +19,7 @@ from guestUtils import  (
 
 from common import Architecture, Endianess
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("FEMU")
 
 def initFirmadyne(rootPath: str) -> None:
     """
