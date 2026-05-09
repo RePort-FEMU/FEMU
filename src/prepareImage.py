@@ -394,8 +394,8 @@ def addEssentialFiles(rootPath: str) -> None:
     populateDev(rootPath)
     
 def preventReboot(rootPath: str) -> None:
-    os.remove(guestToHostPath(rootPath, "/sbin/reboot")) if existsInGuest(rootPath, "/sbin/reboot") else None
-    os.remove(guestToHostPath(rootPath, "/etc/scripts/sys_resetbutton")) if existsInGuest(rootPath, "/etc/scripts/sys_resetbutton") else None
+    os.remove(guestToHostPath(rootPath, "/sbin/reboot")) if os.path.lexists(guestToHostPath(rootPath, "/sbin/reboot")) else None
+    os.remove(guestToHostPath(rootPath, "/etc/scripts/sys_resetbutton")) if os.path.lexists(guestToHostPath(rootPath, "/etc/scripts/sys_resetbutton")) else None
 
 def addNvramEntries(rootPath: str) -> None:
     """
