@@ -17,7 +17,7 @@ from util import (
     insertObjectsToImage,
     insertLinksToImage,
     createRawImg,
-    mountImage,
+    mountedImage,
     unmountImage,
 )
 
@@ -329,9 +329,8 @@ class Emulator:
         createRawImg(os.path.join(workDir, "raw.img"), 1 * GIGA)
         os.makedirs(os.path.join(workDir, "mnt"), exist_ok=True)
         
-        mountImage(os.path.join(workDir, "raw.img"), os.path.join(workDir, "mnt"))
-        self.extractFs(os.path.join(workDir, "mnt")) #TODO Possible leak here. Check return
-        unmountImage(os.path.join(workDir, "mnt"))
+        with mountedImage(os.path.join(workDir, "raw.img"), os.path.join(workDir, "mnt")) as mp:
+            self.extractFs(mp) #TODO Possible leak here. Check return
 
         res = prepareImage(
             os.path.join(workDir, "raw.img"),

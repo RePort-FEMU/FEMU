@@ -7,6 +7,8 @@ import string
 import os
 import re
 
+from contextlib import contextmanager
+
 from common import Architecture, Endianess
 
 from dbInterface import DBInterface
@@ -571,7 +573,23 @@ def unmountImage(mountPoint: str) -> None:
     runAsRoot(["umount", mountPoint])
     
     removePartition(loopDevice)
+    
+@contextmanager
+def mountedImage(rawImagePath: str, mountPoint: str):
+    """
+    Context manager for mounting and unmounting a raw image file.
 
+    Args:
+        rawImagePath (str): Path to the raw image file.
+        mountPoint (str): Directory where the image will be mounted.
+    Yields:
+        str: The mount point where the image is mounted.
+    """
+    try:
+        mountImage(rawImagePath, mountPoint)
+        yield mountPoint
+    finally:
+        unmountImage(mountPoint)
 
 def find(searchPath: str | list[str], fileNames: str | list[str]) -> list[str]:
     """

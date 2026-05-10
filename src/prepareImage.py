@@ -4,7 +4,7 @@ import stat
 import os
 import re
 
-from util import find, findDirs, strings, findStringInBinFile, mountImage, unmountImage, runFsck
+from util import find, findDirs, strings, findStringInBinFile, mountedImage, runFsck
 
 from guestUtils import  (
     guestToHostPath, 
@@ -620,28 +620,26 @@ def prepareImage(imgFilePath: str, mountPoint: str, arch: Architecture, endianes
         os.makedirs(mountPoint, exist_ok=True)
     
     logger.info(f"Mounting image {imgFilePath} to {mountPoint}...")
-    mountImage(imgFilePath, mountPoint)
 
     logger.info("Preparing image for emulation...")
 
-    try:
-        initFirmadyne(mountPoint)
-        
-        verifiedInits = validateInits(mountPoint, possibleInits)
-        foundServices = findServices(mountPoint)
-        
-        fixFileSystem(mountPoint)
-        addNvramEntries(mountPoint)
-        
-        intallFirmadyne(mountPoint, firmadyneScriptsPath)
-        copyBinaries(mountPoint, binariesPath, arch, endianess)
+    with mountedImage(imgFilePath, mountPoint) as mp:
+        try:
+            initFirmadyne(mp)
+
+            verifiedInits = validateInits(mp, possibleInits)
+            foundServices = findServices(mp)
+            
+            fixFileSystem(mp)
+            addNvramEntries(mp)
+            
+            intallFirmadyne(mp, firmadyneScriptsPath)
+            copyBinaries(mp, binariesPath, arch, endianess)
     
-    except Exception as e:
-        logger.error(f"Failed to prepare Image: {e}")
-        unmountImage(mountPoint)
-        return None
+        except Exception as e:
+            logger.error(f"Failed to prepare Image: {e}")
+            return None
     
-    unmountImage(mountPoint)
 
     logger.info("Running fsck on the image...")
     runFsck(imgFilePath)
