@@ -146,7 +146,7 @@ def classifyNetwork(candidates: list, ports: list) -> NetworkResult:
 
 class PreEmulator:
     def __init__(self, imagePath: str, possibleInits: list[str], servicesFound: bool,
-                 arch: Architecture, endiannes: Endianess,
+                 arch: Architecture, endiannes: Endianess, kernelsPath: str,
                  mountPoint: str = "", workDir: str = ""):
 
         self.imagePath = imagePath
@@ -154,6 +154,7 @@ class PreEmulator:
         self.architecture = arch
         self.endiannes = endiannes
         self.servicesFound = servicesFound
+        self.kernelsPath = kernelsPath
 
         if len(self.possibleInits) == 0:
             raise ValueError("No possible inits provided")
@@ -213,13 +214,12 @@ class PreEmulator:
 
     def getKernelPath(self) -> str:
         """Return the emulation kernel path for the current architecture."""
-        kernelDir = "/home/georgerg/FEMU/binaries"  # TODO: make configurable
         if self.architecture == Architecture.ARM:
-            return os.path.join(kernelDir, "zImage.armel")
+            return os.path.join(self.kernelsPath, "zImage.armel")
         elif self.architecture == Architecture.MIPS and self.endiannes == Endianess.BIG:
-            return os.path.join(kernelDir, "vmlinux.mipseb.4")
+            return os.path.join(self.kernelsPath, "vmlinux.mipseb.4")
         elif self.architecture == Architecture.MIPS and self.endiannes == Endianess.LITTLE:
-            return os.path.join(kernelDir, "vmlinux.mipsel.4")
+            return os.path.join(self.kernelsPath, "vmlinux.mipsel.4")
         raise ValueError("Unsupported architecture or endianness")
 
     def getNetworkInfo(self, kernelLogPath: str) -> tuple[list, list]:

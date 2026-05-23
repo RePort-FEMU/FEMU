@@ -404,6 +404,7 @@ class Emulator:
             len(foundServices) > 0,
             self.architecture,
             self.endianess,
+            self.config.binariesPath,
             os.path.join(workDir, "mnt"),
             workDir,
         )
