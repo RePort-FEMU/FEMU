@@ -1,9 +1,10 @@
+import json
 import logging
 import shutil
 import os
 import sys
 
-from common import RunningMode, Architecture, Endianess, KILO, MEGA, GIGA
+from common import RunningMode, Architecture, Endianess, NetworkResult, ProbeResult, GIGA
 from dbInterface import DBInterface
 from emulatorConfig import emulatorConfig
 from util import (
@@ -292,7 +293,54 @@ class Emulator:
             logger.error(f"Failed to extract filesystem: {e}")
             return False
 
-    def run(self):
+    def _exportFindings(self, probeResult: ProbeResult, kernelPath: str,
+                        foundServices: dict, workDir: str) -> dict:
+        nr = probeResult.networkResult
+        findings = {
+            "firmware": {
+                "path": self.config.firmwarePath,
+                "hash": self.hash,
+                "iid": self.iid,
+                "brand": self.brand,
+            },
+            "emulation": {
+                "imagePath": os.path.join(workDir, "raw.img"),
+                "architecture": str(self.architecture),
+                "endianness": str(self.endianess),
+                "kernelPath": kernelPath,
+                "initArg": probeResult.initArg,
+                "workDir": workDir,
+            },
+            "initInjection": {
+                "modifiedGuestFile": probeResult.modifiedGuestFile,
+                "injectedContent": probeResult.injectedContent,
+            },
+            "services": foundServices,
+            "network": {
+                "networkType": nr.networkType,
+                "netBridge": nr.netBridge,
+                "netInterface": nr.netInterface,
+                "candidates": [
+                    {"ip": ip, "interface": iface, "bridge": bridge,
+                     "vlans": vlans, "macs": macs}
+                    for ip, iface, bridge, vlans, macs in nr.candidates
+                ],
+                "ports": [
+                    {"port": port, "proto": proto}
+                    for port, proto in nr.ports
+                ],
+                "isUserNetwork": nr.isUserNetwork,
+                "hostIps": nr.hostIps,
+            },
+        }
+
+        findingsPath = os.path.join(workDir, "findings.json")
+        with open(findingsPath, "w") as f:
+            json.dump(findings, f, indent=2)
+        logger.info(f"Findings exported to {findingsPath}")
+        return findings
+
+    def run(self) -> dict | None:
         logger.info(f"Running emulator for firmware: {self.config.firmwarePath}")
         
         logger.info(f"Step 1: Extracting firmware image {self.config.firmwarePath}")
@@ -341,11 +389,40 @@ class Emulator:
             os.path.join(self.config.scriptsPath, "firmadyne"),
             self.inferredKernelInit
         )
-        
+
         if not res:
             logger.error("Failed to prepare image for emulation.")
             return
-        
+
         foundInits, foundServices = res
-        PreEmulator(os.path.join(workDir, "raw.img"), foundInits, len(foundServices) > 0, self.architecture, self.endianess, os.path.join(workDir, "mnt"), workDir).start()
+
+        logger.info(f"Step 3: probing emulation with {len(foundInits)} init candidates and {len(foundServices)} found services")
+
+        pre = PreEmulator(
+            os.path.join(workDir, "raw.img"),
+            foundInits,
+            len(foundServices) > 0,
+            self.architecture,
+            self.endianess,
+            os.path.join(workDir, "mnt"),
+            workDir,
+        )
+        probeResult = pre.start()
+
+        if probeResult is None:
+            logger.error("Pre-emulation probe failed for all inits — aborting.")
+            return
+
+        nr = probeResult.networkResult
+        logger.info(
+            f"Network ready: type={nr.networkType} "
+            f"bridge={nr.netBridge} iface={nr.netInterface} "
+            f"userNet={nr.isUserNetwork}"
+        )
+        if nr.hostIps:
+            logger.info(f"Host IPs: {', '.join(nr.hostIps)}")
+            
+        logger.info(f"Step 4: exporting findings")
+
+        return self._exportFindings(probeResult, pre.getKernelPath(), foundServices, workDir)
         

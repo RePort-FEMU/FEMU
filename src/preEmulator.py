@@ -1,305 +1,403 @@
 import subprocess
 import tempfile
 import logging
-import time
+import ipaddress
 import os
 
-from collections.abc import Callable
-from enum import Enum
+from typing import Optional
 
-from util import mountedImage, unmountImage
+from util import mountedImage
 from guestUtils import hostToGuestPath, guestToHostPath
-from common import Endianess, Architecture
+from common import Endianess, Architecture, NetworkResult, ProbeResult
 from qemuInterface import Qemu
-from kernelLogUtils import findBridges, findInterfaceIps, findPorts, findOutwardInterfaces, findMacChanges, findVLANs
+from kernelLogUtils import findBridges, findInterfaceIps, findPorts, findMacChanges, findVLANs
+from emulationVerifier import verifyEmulation
 
-TIMEOUT = 300 # 5 minutes #TODO make this configurable
+TIMEOUT = 300  # probe run timeout (5 minutes)
 
 logger = logging.getLogger("FEMU")
 
-class networkType(Enum):
-    NONE= 0
+
+# ---------------------------------------------------------------------------
+# Network classification helpers
+# ---------------------------------------------------------------------------
+
+def isValidLanIp(ip: str) -> bool:
+    """Return True for a usable RFC 1918 unicast address (not network/broadcast)."""
+    try:
+        addr = ipaddress.ip_address(ip)
+        if addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_unspecified:
+            return False
+        octets = ip.split(".")
+        if octets[-1] in ("0", "255"):
+            return False
+        return addr.is_private
+    except ValueError:
+        return False
+
+
+def isDhcpLike(ip: str) -> bool:
+    """Return True for IPs that are likely DHCP-assigned rather than static LAN addresses."""
+    if ip.startswith("10.0.2."):   # QEMU user-mode SLIRP range
+        return True
+    if ip.startswith("169.254."):  # APIPA / failed DHCP
+        return True
+    if ip.endswith(".190"):        # Netgear DHCP quirk
+        return True
+    return False
+
+
+def computeHostIp(guestIp: str) -> str:
+    """
+    Derive a usable host-side IP from the guest IP.
+    Avoids .0 (network address) for the common .1 guest case.
+    """
+    octets = guestIp.split(".")
+    last = int(octets[-1])
+    octets[-1] = "2" if last == 1 else str(last - 1)
+    return ".".join(octets)
+
+
+def classifyNetwork(candidates: list, ports: list) -> NetworkResult:
+    """
+    Classify pre-emulation network candidates into a NetworkResult.
+
+    Improvements over FirmAE's checkNetwork():
+    - Uses bridge==interface as the proxy for "no physical member found in log"
+      instead of checking whether the name starts with 'eth'.
+    - Proper RFC 1918 + unicast validity check instead of .endswith(".0.0.0").
+    - Unified DHCP detection (QEMU SLIRP, APIPA, known quirks) applied
+      consistently in one place.
+    - DHCP-only → user networking; mixed static+DHCP → drop DHCP (WAN side).
+    - Unmatched interface slots fall back to user networking, not dead sockets.
+    """
+    candidates = [c for c in candidates if c[1] != "lo"]
+
+    if not candidates:
+        return NetworkResult(
+            "default", "br0", "eth0",
+            [("192.168.0.1", "eth0", "br0", [], [])],
+            ports, False, ["192.168.0.2"],
+        )
+
+    static = [c for c in candidates if not isDhcpLike(c[0])]
+    dhcp   = [c for c in candidates if     isDhcpLike(c[0])]
+
+    # Mixed static+DHCP: discard DHCP entries (they are the WAN interface)
+    working = static if static else dhcp
+    isUserNetwork = not bool(static)
+
+    if isUserNetwork:
+        return NetworkResult("default", "br0", "eth0", dhcp, ports, True, [])
+
+    # bridge != iface  →  physical eth member found in log, bridge owns the IP
+    # bridge == iface  →  no member logged yet; firmware will add eth0 later
+    valid_bridged   = [c for c in working if c[2] != c[1] and     isValidLanIp(c[0])]
+    valid_direct    = [c for c in working if c[2] == c[1] and     isValidLanIp(c[0])]
+    invalid_bridged = [c for c in working if c[2] != c[1] and not isValidLanIp(c[0])]
+    invalid_direct  = [c for c in working if c[2] == c[1] and not isValidLanIp(c[0])]
+
+    ethPool = ["eth0", "eth1", "eth2", "eth3"]
+
+    if valid_bridged:
+        hostIps = [computeHostIp(c[0]) for c in valid_bridged]
+        chosen = valid_bridged[0]
+        return NetworkResult("normal", chosen[2], chosen[1], valid_bridged, ports, False, hostIps)
+
+    if valid_direct:
+        # Bridge has the IP but eth0 hasn't joined it yet in the log.
+        # Replace interface name with ethX because QEMU NICs are always ethN.
+        adjusted = [
+            (ip, ethPool[i], bridge, vlans, macs)
+            for i, (ip, _, bridge, vlans, macs) in enumerate(valid_direct)
+            if i < len(ethPool)
+        ]
+        hostIps = [computeHostIp(c[0]) for c in adjusted]
+        chosen = adjusted[0]
+        return NetworkResult("bridge", chosen[2], chosen[1], adjusted, ports, False, hostIps)
+
+    if invalid_bridged:
+        adjusted = [("192.168.0.1", iface, bridge, vlans, macs)
+                    for _, iface, bridge, vlans, macs in invalid_bridged]
+        chosen = adjusted[0]
+        return NetworkResult("reload", chosen[2], chosen[1], adjusted, ports, False,
+                             ["192.168.0.2"] * len(adjusted))
+
+    if invalid_direct:
+        adjusted = [
+            ("192.168.0.1", ethPool[i], bridge, vlans, macs)
+            for i, (_, _, bridge, vlans, macs) in enumerate(invalid_direct)
+            if i < len(ethPool)
+        ]
+        chosen = adjusted[0]
+        return NetworkResult("bridgereload", chosen[2], chosen[1], adjusted, ports, False,
+                             ["192.168.0.2"] * len(adjusted))
+
+    return NetworkResult(
+        "default", "br0", "eth0",
+        [("192.168.0.1", "eth0", "br0", [], [])],
+        ports, False, ["192.168.0.2"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# PreEmulator
+# ---------------------------------------------------------------------------
 
 class PreEmulator:
-    def __init__(self, imagePath: str, possibleInits: list[str], servicesFound: bool, arch: Architecture, endiannes: Endianess, mountPoint: str = "", workDir: str = ""):
-        
+    def __init__(self, imagePath: str, possibleInits: list[str], servicesFound: bool,
+                 arch: Architecture, endiannes: Endianess,
+                 mountPoint: str = "", workDir: str = ""):
+
         self.imagePath = imagePath
         self.possibleInits = possibleInits
         self.architecture = arch
         self.endiannes = endiannes
         self.servicesFound = servicesFound
-        
+
         if len(self.possibleInits) == 0:
             raise ValueError("No possible inits provided")
-        
-        if mountPoint:
-            self.mountPoint = mountPoint
-        else:
-            self.mountPoint = tempfile.mkdtemp(prefix="femu-mount-", dir="/tmp")
-            
-        if workDir:
-            self.workDir = workDir
-        else:
-            self.workDir = tempfile.mkdtemp(prefix="femu-work-", dir="/tmp")
-            
-            
-        self.networkType = networkType.NONE
-        
-    # def __del__(self):
-        
-    #     # TODO: Unmount the image if it was mounted
-    #     try:
-    #         shutil.rmtree(self.mountPoint)
-    #     except Exception as e:
-    #         print(f"Error removing mount point {self.mountPoint}: {e}")
-        
-    #     try:
-    #         shutil.rmtree(self.workDir)
-    #     except Exception as e:
-    #         print(f"Error removing work directory {self.workDir}: {e}")
-            
+
+        self.mountPoint = mountPoint or tempfile.mkdtemp(prefix="femu-mount-", dir="/tmp")
+        self.workDir    = workDir    or tempfile.mkdtemp(prefix="femu-work-",  dir="/tmp")
+
+        self.backupFile: str | None = None
+        self.backupData: str | None = None
+        self.qemu = Qemu(self.imagePath, self.architecture, self.endiannes,
+                         self.getKernelPath(), self.workDir)
+
     def getInitType(self, init: str) -> str:
-        """Run the file command to determine the init type.
-        
-        Args:
-            init (str): The init path to determine the type of.
-            
-        Returns:
-            str: The output of the file command for the init.
-        """
-        
-        # TODO: Maybe use python-magic instead of calling file command
+        """Run the file command to determine the init type."""
         res = subprocess.run(["file", "-b", init], capture_output=True, text=True)
-        
         if res.returncode != 0:
             raise RuntimeError(f"Failed to run file command on {init}: {res.stderr.strip()}")
-        
         if "No such file or directory" in res.stdout.strip():
-            raise FileNotFoundError(f"File {init}() not found")
-                
-        output = res.stdout.strip()
-        
-        return output
-    
+            raise FileNotFoundError(f"File {init} not found")
+        return res.stdout.strip()
+
     def injectInit(self, init: str, initType: str) -> str:
-        """Inject firmadyne scripts to the init.
-        
-        Args:
-            init (str): The init to inject.
-            initType (str): The type of the init as determined by the file command.
-        
-        Returns:
-            str: the kernel init command line argument to pass to the emulator
-        """
-        
-        def injectFile(filePath:str, extraContent: str = ""):
+        """Inject firmadyne scripts into the init and return the kernel init argument."""
+
+        def injectFile(filePath: str, extraContent: str = ""):
             with open(filePath, "a") as f:
                 f.write("\n# Injected by PreEmulator\n")
-                
                 f.write("echo 'Init injected by PreEmulator'\n")
-                
                 if extraContent:
                     f.write(extraContent)
-                
                 f.write("/firmadyne/network.sh &\n")
-                
                 if self.servicesFound:
-                    f.write('/firmadyne/run_service.sh &\n')
-                    
-                f.write('/firmadyne/debug.sh &\n')
-                
+                    f.write("/firmadyne/run_service.sh &\n")
+                f.write("/firmadyne/debug.sh &\n")
                 # Long sleep for devices that need it (TEW-828DRU_1.0.7.2, etc...)
-                f.write('/firmadyne/busybox sleep 36000\n')
-                
-        logger.info(f"Injecting init {init} of type {initType} into image {self.imagePath}")
-        # TODO: Refactor this to cover more cases also try with actually setting the init. Currently we only set it some times
+                f.write("/firmadyne/busybox sleep 36000\n")
+
+        logger.info(f"Injecting init {init} (type: {initType}) into {self.imagePath}")
+
         if os.path.basename(init) == "preInit.sh":
             injectFile(guestToHostPath(self.mountPoint, init))
             self.backupFile = None
             self.backupData = None
         else:
-            if initType.find("ELF") == -1 and initType.find("symbolic link") == -1: # possibly a script
+            if "ELF" not in initType and "symbolic link" not in initType: # possibly a script
                 self.backupFile = guestToHostPath(self.mountPoint, init)
-                self.backupData = readWithException(self.backupFile)
+                self.backupData = _readWithException(self.backupFile)
                 injectFile(self.backupFile)
-                return 'rdinit=/firmadyne/preInit.sh'
-            elif initType.find("ELF") != -1 or initType.find("symbolic link") != -1: # netgear R6200 TODO: improve this check
+                return "rdinit=/firmadyne/preInit.sh"
+            elif "ELF" in initType or "symbolic link" in initType: # netgear R6200 TODO: improve this check
                 self.backupFile = guestToHostPath(self.mountPoint, "/firmadyne/preInit.sh")
-                self.backupData = readWithException(self.backupFile)
+                self.backupData = _readWithException(self.backupFile)
                 injectFile(self.backupFile, f"exec {init} &\n")
-                return 'init=/firmadyne/preInit.sh'
-                
-        return 'rdinit=/firmadyne/preInit.sh'  # Default case, just use the preInit script
-    
+                return "init=/firmadyne/preInit.sh"
+
+        return "rdinit=/firmadyne/preInit.sh"
+
     def getKernelPath(self) -> str:
-        """Get the kernel path based on architecture and endianness.
-        Returns:
-            str: The path to the kernel image to use for QEMU.
-        """
-        # TODO: Make kernelDir configurable
-        kernelDir = "/home/georgerg/FEMU/binaries"
+        """Return the emulation kernel path for the current architecture."""
+        kernelDir = "/home/georgerg/FEMU/binaries"  # TODO: make configurable
         if self.architecture == Architecture.ARM:
-            return os.path.join(kernelDir, "zImage.armel")  # Kernel image
+            return os.path.join(kernelDir, "zImage.armel")
         elif self.architecture == Architecture.MIPS and self.endiannes == Endianess.BIG:
-            return os.path.join(kernelDir, "vmlinux.mipseb.4") # Kernel image for big-endian MIPS
+            return os.path.join(kernelDir, "vmlinux.mipseb.4")
         elif self.architecture == Architecture.MIPS and self.endiannes == Endianess.LITTLE:
             return os.path.join(kernelDir, "vmlinux.mipsel.4")
-        else:
-            raise ValueError("Unsupported architecture or endianness")
-        
-    def getNetworkInfo(self, kernelLogPath: str) -> tuple[list[tuple[int, str]], list[tuple[str, str, str, list[str], list[str]]]]:
-        """
-        Get the network info from the kernel log.
-        
-        Args:
-            kernelLogPath (str): The path to the kernel log file.
-            
-        Returns:
-            tuple[list[tuple[int, str]], list[tuple[str, str, str, list[str], list[str]]]]: A tuple containing a list of ports (number, protocol), 
-                                                                                           a list of configuration candidates (IP address, interface name, bridge name, VLAN IDs, MAC addresses).
-        """
-        logger.debug("Reading kernel log: " + kernelLogPath)
+        raise ValueError("Unsupported architecture or endianness")
+
+    def getNetworkInfo(self, kernelLogPath: str) -> tuple[list, list]:
+        """Parse a kernel log and return (ports, configCandidates)."""
+        logger.debug(f"Reading kernel log: {kernelLogPath}")
         with open(kernelLogPath, "r") as f:
             kernelLog = f.readlines()
-        
+
         ports = findPorts(kernelLog)
         logger.info(f"Found {len(ports)} ports in kernel log")
-        if ports:
-            logger.debug(f"Ports found: {', '.join([f'{port}/{proto}' for port, proto in ports])}")
-        
-        ips = findInterfaceIps(kernelLog, self.endiannes)
-        logger.info(f"Found {len(ips)} interfaces with IP addresses in kernel log")
-        for iface, addr in ips:
-            logger.debug(f"Interface found: {iface} with address {addr}")
-            
-        macChanges = findMacChanges(kernelLog, self.endiannes)
-        logger.info(f"Found {len(macChanges)} MAC address changes in kernel log")
-        for iface, newMac in macChanges:
-            logger.debug(f"MAC address change found on interface {iface}: {newMac}")
-            
-        bridges = findBridges(kernelLog)
-        logger.info(f"Found {len(bridges)} bridges in kernel log")
-        for bridge, netdevs in bridges.items():
-            logger.debug(f"Bridge found: {bridge} with netdevs {', '.join(netdevs)}")
-            
-        vlans = findVLANs(kernelLog)
-        logger.info(f"Found {len(vlans)} VLANs in kernel log")
-        for iface, vlan_ids in vlans.items():
-            logger.debug(f"Interface {iface} is associated with VLANs: {', '.join(map(str, vlan_ids))}")
 
-        # generate possible configurations
+        ips = findInterfaceIps(kernelLog, self.endiannes)
+        logger.info(f"Found {len(ips)} interfaces with IPs")
+
+        macChanges = findMacChanges(kernelLog, self.endiannes)
+        bridges    = findBridges(kernelLog)
+        vlans      = findVLANs(kernelLog)
+
         configCandidates = []
         for interface, addr in ips:
             if interface == "lo":
                 continue
-            
-            cleanInterface = interface.split(".")[0] # Remove VLAN id if present
-            
-            # Find the bridges for this interface
-            # Remove the VLAN id from the interface name if it is present (e.g., eth0.1 -> eth0)
-            relatedBridges = [bridge for bridge, ifaces in bridges.items() if cleanInterface in [iface.split(".")[0] for iface in ifaces]]
-            logger.debug(f"Related bridges for interface {interface}: {', '.join(relatedBridges) if relatedBridges else 'None'}")
-            
+
+            cleanIface = interface.split(".")[0]
+            relatedBridges = [
+                bridge for bridge, ifaces in bridges.items()
+                if cleanIface in [iface.split(".")[0] for iface in ifaces]
+            ]
+
             candidateFound = False
             for bridge in relatedBridges:
-                # Find the VLANs for this bridge
-                relatedVlans = []
-                for iface, vlan_ids in vlans.items():
-                    if iface.split(".")[0] == bridge.split(".")[0] or iface.split(".")[0] == cleanInterface: # Consider VLANs directly on the bridge or on the interface
-                        relatedVlans.extend(vlan_ids)
-                relatedVlans = list(set(relatedVlans)) # Remove duplicates
+                relatedVlans = list({
+                    vid
+                    for iface, vids in vlans.items()
+                    if iface.split(".")[0] in (bridge.split(".")[0], cleanIface)
+                    for vid in vids
+                })
+                possibleMacs = list(macChanges.get(interface, []))
+                for m in macChanges.get(bridge, []):
+                    if m not in possibleMacs:
+                        possibleMacs.append(m)
 
-                logger.debug(f"Related VLANs for bridge {bridge}: {', '.join(relatedVlans) if relatedVlans else 'None'}")
-                
-                possibleMacs = macChanges.get(interface, [])
-                possibleMacs.extend(m for m in macChanges.get(bridge, []) if m not in possibleMacs) # also consider MAC changes on the bridge 
                 candidate = (addr, interface, bridge, relatedVlans, possibleMacs)
                 if candidate not in configCandidates:
                     configCandidates.append(candidate)
                     candidateFound = True
-                    
-            # If no candidates were generated, add a default one 
+
             if not candidateFound:
-                relatedVlans = vlans.get(interface, [])
-                possibleMacs = macChanges.get(interface, [])
+                relatedVlans  = list(vlans.get(interface, []))
+                possibleMacs  = list(macChanges.get(interface, []))
                 candidate = (addr, interface, interface, relatedVlans, possibleMacs)
                 if candidate not in configCandidates:
                     configCandidates.append(candidate)
-                    logger.debug(f"No related bridge found for interface {interface}, adding default.")
-                
-        return ports, configCandidates
-    
-    def runQemu(self, initArg: str, logfile: str):
-        qemu = Qemu(self.imagePath, self.architecture, self.endiannes, self.getKernelPath(), self.workDir)
 
-        try:
-            startTime = time.time()
-            qemu.run(initArg, logfile, timeout=TIMEOUT, on_line=kernelPanicCallback)
-            endTime = time.time()
-            logger.info(f"QEMU finished after {endTime - startTime:.2f} seconds, processing logs...")
-        except subprocess.TimeoutExpired:
-            logger.error(f"QEMU timed out after {TIMEOUT} seconds")
-        except Exception as e:
-            logger.error(f"QEMU failed with error: {e}")
-            raise e
-            
-    def start(self):
-        
-        logger.info(f"Starting pre-emulator with image {self.imagePath} and inits {self.possibleInits}")
-        for init in self.possibleInits:            
+        return ports, configCandidates
+
+    def _writeNetworkFiles(self, config: dict[str, str]) -> None:
+        """Mount the image and write /firmadyne/network_type, net_bridge, net_interface."""
+        with mountedImage(self.imagePath, self.mountPoint) as mp:
+            for filename, value in config.items():
+                path = os.path.join(mp, "firmadyne", filename)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as f:
+                    f.write(value)
+        logger.debug(f"Written network files: {config}")
+
+    def _restoreBackupIfNeeded(self) -> None:
+        """Restore the injected init file. Called when an init attempt fails."""
+        if self.backupFile and self.backupData is not None:
+            with mountedImage(self.imagePath, self.mountPoint) as mp:
+                with open(self.backupFile, "w") as f:
+                    f.write(self.backupData)
+            logger.debug(f"Restored original init: {self.backupFile}")
+        self.backupFile = None
+        self.backupData = None
+
+    def start(self) -> Optional[ProbeResult]:
+        """
+        For each possible init, run the full pre-emulation pipeline:
+          1. Inject network.sh into the init script.
+          2. Probe QEMU run (network_type="None" — no bridging).
+          3. Classify the network from the probe log.
+          4. Write final network config files into the image.
+          5. Verify run: boot with the classified config and check reachability
+             (ping + TCP ports), mirroring FirmAE's check_emulation.sh.
+          6. Always restores the injected init before returning.
+          7. On success: return ProbeResult. On failure: try the next init.
+        """
+        logger.info(f"Starting pre-emulator for {self.imagePath} with inits {self.possibleInits}")
+
+        for init in self.possibleInits:
             logger.info(f"Processing init: {init}")
-            
-            with mountedImage(self.imagePath, self.mountPoint) as mp:            
+
+            # --- inject ---
+            modifiedGuestFile = None
+            injectedContent = None
+            with mountedImage(self.imagePath, self.mountPoint) as mp:
                 try:
-                    initArg = self.injectInit(init, self.getInitType(guestToHostPath(self.mountPoint, init)))
+                    initArg = self.injectInit(
+                        init,
+                        self.getInitType(guestToHostPath(self.mountPoint, init)),
+                    )
+                    # Capture injection record now — backupFile is only valid while mounted
+                    if self.backupFile:
+                        modifiedGuestFile = self.backupFile[len(self.mountPoint):]
+                    if self.backupFile and self.backupData is not None:
+                        with open(self.backupFile, "r", errors="replace") as f:
+                            injectedContent = f.read()[len(self.backupData):]
                 except Exception as e:
                     logger.error(f"Failed to inject init {init}: {e}")
                     continue
-                                                
-            logger.info(f"Running QEMU with init argument: {initArg}")
+
+            # --- probe: network.sh reads "None" and does nothing ---
+            self._writeNetworkFiles({
+                "network_type":  "None",
+                "net_bridge":    "",
+                "net_interface": "",
+            })
+
             os.makedirs(os.path.join(self.workDir, "kernelLogs"), exist_ok=True)
-            logfile = os.path.join(self.workDir, "kernelLogs", f"qemu.{init[1:].replace('/', '-')}.serial.log") # Skip the leading /
-            self.runQemu(initArg, logfile)
-            
-            # TODO: Add NVRAM dafault file checking
-            
-            ports, configCandidates = self.getNetworkInfo(os.path.join(self.workDir, logfile))
-            logger.debug(f"Configuration candidates for init {init}:")
-            for addr, iface, bridge, vlans, macs in configCandidates:
-                logger.debug(f"  Interface: {iface}, Address: {addr}, Bridge: {bridge}, VLANs: {', '.join(map(str, vlans)) if vlans else 'None'}, MAC changes: {', '.join(macs) if macs else 'None'}")
-                
-            
-                
-            # Restore the original file if it was modified
-            if self.backupFile and self.backupData is not None:
-                with mountedImage(self.imagePath, self.mountPoint) as mp:
-                    with open(self.backupFile, "w") as f:
-                        f.write(self.backupData)
-                    logger.debug(f"Restored original file {self.backupFile}")
-                self.backupFile = None
-                self.backupData = None
-            
-            
-                    
-def kernelPanicCallback(line: str | None) -> bool:
-    if line and ("Kernel panic" in line or "kernel panic" in line):
-        logger.warning(f"Kernel panic detected in QEMU output: {line.strip()}")
-        return True
-    return False
+            probeLog = os.path.join(
+                self.workDir, "kernelLogs",
+                f"qemu.{init[1:].replace('/', '-')}.serial.log",
+            )
+            logger.info(f"Running probe QEMU")
+            try:
+                self.qemu.run(initArg, probeLog, timeout=TIMEOUT)
+            except subprocess.TimeoutExpired:
+                logger.info(f"Probe timed out after {TIMEOUT}s")
+
+            #TODO: check nvram defaults
+
+            # --- classify ---
+            ports, candidates = self.getNetworkInfo(probeLog)
+            for addr, iface, bridge, vlns, macs in candidates:
+                logger.debug(f"  candidate: iface={iface} addr={addr} bridge={bridge} "
+                             f"vlans={vlns} macs={macs}")
+
+            networkResult = classifyNetwork(candidates, ports)
+            logger.info(
+                f"Network classified: type={networkResult.networkType} "
+                f"bridge={networkResult.netBridge} iface={networkResult.netInterface} "
+                f"userNet={networkResult.isUserNetwork}"
+            )
+
+            # --- write final config ---
+            self._writeNetworkFiles({
+                "network_type":  networkResult.networkType,
+                "net_bridge":    networkResult.netBridge,
+                "net_interface": networkResult.netInterface,
+            })
+
+            # --- verify reachability (mirrors check_emulation.sh) ---
+            reachable = verifyEmulation(initArg, networkResult, self.workDir, self.qemu.run)
+            self._restoreBackupIfNeeded()
+
+            if reachable:
+                return ProbeResult(initArg, networkResult, modifiedGuestFile, injectedContent)
+
+            logger.warning(f"Init {init} did not produce a reachable device — trying next")
+
+        logger.error("All inits exhausted without a reachable emulation")
+        return None
 
 
-# TODO: Improve this function
-def readWithException(filePath):
-    fileData = ''
-    with open(filePath, 'rb') as f:
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+def _readWithException(filePath: str) -> str:
+    data = ""
+    with open(filePath, "rb") as f:
         while True:
             try:
                 line = f.readline().decode()
                 if not line:
                     break
-                fileData += line
+                data += line
             except Exception:
-                fileData += ''
-
-    return fileData
-    
+                data += ""
+    return data

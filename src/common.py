@@ -1,4 +1,5 @@
 from enum import Enum
+from dataclasses import dataclass, field
 
 class RunningMode(Enum):
     RUN = "run"
@@ -44,3 +45,22 @@ class Endianess(Enum):
 GIGA = 1024 * 1024 * 1024
 MEGA = 1024 * 1024
 KILO = 1024
+
+@dataclass
+class ProbeResult:
+    """Returned by PreEmulator.start() — everything needed to reproduce the emulation."""
+    initArg: str                    # kernel init= / rdinit= argument
+    networkResult: "NetworkResult"
+    modifiedGuestFile: str | None   # guest path of the injected init file
+    injectedContent: str | None     # content appended to that file
+
+@dataclass
+class NetworkResult:
+    """Holds the classified network configuration produced by the pre-emulation probe."""
+    networkType: str        # "default" | "normal" | "reload" | "bridge" | "bridgereload" | "None"
+    netBridge: str          # value written to /firmadyne/net_bridge
+    netInterface: str       # value written to /firmadyne/net_interface
+    candidates: list        # [(ip, iface, bridge, vlans, macs), ...]
+    ports: list             # [(port, proto), ...]
+    isUserNetwork: bool     # True → QEMU user/SLIRP networking; False → TAP
+    hostIps: list           # host-side IPs (one per candidate, empty for user network)
