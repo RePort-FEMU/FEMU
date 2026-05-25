@@ -398,6 +398,54 @@ class Emulator:
         qemu = Qemu(em["imagePath"], arch, end, em["kernelPath"], em["workDir"], debug=debug)
         return qemu, em["initArg"], em["workDir"], networkResult
 
+    def _applyInjection(self, findings: dict) -> bool:
+        """Re-apply the init injection that was restored after explore(). Idempotent."""
+        inj = findings.get("initInjection", {})
+        guestFile = inj.get("modifiedGuestFile")
+        content   = inj.get("injectedContent")
+        if not guestFile or not content:
+            return True  # nothing to inject (preInit.sh case)
+
+        imagePath = findings["emulation"]["imagePath"]
+        workDir   = findings["emulation"]["workDir"]
+        mountPoint = os.path.join(workDir, "mnt")
+        os.makedirs(mountPoint, exist_ok=True)
+
+        with mountedImage(imagePath, mountPoint) as mp:
+            hostPath = mp + guestFile
+            if not os.path.exists(hostPath):
+                logger.error(f"Cannot re-inject: {hostPath} not found in image")
+                return False
+            with open(hostPath, "r", errors="replace") as f:
+                current = f.read()
+            if "# Injected by PreEmulator" in current:
+                logger.debug("Injection already present — skipping re-inject")
+                return True
+            with open(hostPath, "a") as f:
+                f.write(content)
+            logger.info(f"Re-applied injection to {guestFile}")
+        return True
+
+    def _logAccessInfo(self, findings: dict) -> None:
+        """Print the URLs and shell access info so the user knows where to point a browser."""
+        net = findings["network"]
+        webPorts = {p["port"] for p in net["ports"] if p["proto"] == "tcp" and p["port"] in (80, 443, 8080, 8443)}
+
+        if net["isUserNetwork"]:
+            baseIps = ["127.0.0.1"]
+        else:
+            baseIps = [c["ip"] for c in net["candidates"]]
+
+        if webPorts:
+            for ip in baseIps:
+                for port in sorted(webPorts):
+                    scheme = "https" if port in (443, 8443) else "http"
+                    suffix = f":{port}" if port not in (80, 443) else ""
+                    logger.info(f"  Web UI → {scheme}://{ip}{suffix}/")
+        else:
+            for ip in baseIps:
+                logger.info(f"  Web UI → http://{ip}/  (no web port detected — try manually)")
+
     # ------------------------------------------------------------------
     # Modes
     # ------------------------------------------------------------------
@@ -505,7 +553,10 @@ class Emulator:
         if not result:
             return
         qemu, initArg, workDir, networkResult = result
+        if not self._applyInjection(findings):
+            return
         logPath = os.path.join(workDir, "qemu.boot.serial.log")
+        self._logAccessInfo(findings)
         logger.info(f"Booting firmware, log → {logPath}")
         try:
             qemu.run(initArg, logPath, networkResult=networkResult, timeout=86400)
@@ -520,7 +571,10 @@ class Emulator:
         if not result:
             return
         qemu, initArg, workDir, networkResult = result
+        if not self._applyInjection(findings):
+            return
         logPath = os.path.join(workDir, "qemu.debug.serial.log")
+        self._logAccessInfo(findings)
         logger.info(f"Booting firmware in debug mode (nc:31337, telnet:31338), log → {logPath}")
         try:
             qemu.run(initArg, logPath, networkResult=networkResult, timeout=86400)
