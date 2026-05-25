@@ -328,8 +328,9 @@ class Qemu:
                 time.sleep(0.5)
         finally:
             stop_event.set()
+            self._sendMonitorCommand("quit")
             try:
-                process.wait(timeout=10)
+                process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 logger.warning("QEMU did not exit after quit — killing.")
                 process.kill()

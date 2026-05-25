@@ -126,6 +126,66 @@ def verifyEmulation(
     return reachable[0]
 
 
+_WEB_PORTS = {80, 443, 8080, 8443, 8000, 8888}
+
+
+def makeNetworkMonitor(networkResult: NetworkResult) -> "Callable[[str | None], bool]":
+    """
+    Return an on_line callback for Qemu.run() during boot/debug.
+    Continuously checks all detected ports and logs each service the first time
+    it responds. Always returns False — never interrupts QEMU.
+    """
+    tcpPorts = [port for port, proto in networkResult.ports if proto == "tcp" and port != 0]
+
+    if networkResult.isUserNetwork:
+        checkIps     = ["127.0.0.1"]
+        checkPing    = False
+        portsToCheck = tcpPorts
+        if not portsToCheck:
+            return lambda _: False
+    elif networkResult.candidates:
+        checkIps     = [c[0] for c in networkResult.candidates]
+        checkPing    = True
+        portsToCheck = [80, 443] + [p for p in tcpPorts if p not in (80, 443)]
+    else:
+        return lambda _: False
+
+    startTime   = time.monotonic()
+    lastCheck   = [0.0]
+    reported: set[tuple] = set()
+    pingReported: set[str] = set()
+
+    def onLine(line: str | None) -> bool:
+        elapsed = time.monotonic() - startTime
+        if elapsed < BOOT_WAIT:
+            return False
+        if line is not None or elapsed - lastCheck[0] < CHECK_INTERVAL:
+            return False
+        lastCheck[0] = elapsed
+
+        for ip in checkIps:
+            if checkPing and ip not in pingReported and _checkPing(ip):
+                pingReported.add(ip)
+                logger.info(f"Ping reachable: {ip}")
+
+            for port in portsToCheck:
+                if (ip, port) in reported:
+                    continue
+                ok = _checkHttp(ip, port) if port in (80, 443) else _checkTcp(ip, port)
+                if ok:
+                    reported.add((ip, port))
+                    if port in _WEB_PORTS:
+                        scheme = "https" if port in (443, 8443) else "http"
+                        suffix = f":{port}" if port not in (80, 443) else ""
+                        logger.info(f"Web UI up → {scheme}://{ip}{suffix}/")
+                    else:
+                        logger.info(f"Service up → {ip}:{port}/tcp")
+
+        return False
+
+    return onLine
+
+
 def _checkHttp(ip: str, port: int) -> bool:
     """HTTP/HTTPS GET — any response including error codes means the server is up."""
     scheme = "https" if port == 443 else "http"

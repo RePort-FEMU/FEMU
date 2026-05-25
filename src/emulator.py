@@ -3,6 +3,7 @@ import logging
 import shutil
 import os
 import sys
+import signal
 import subprocess
 
 from common import Architecture, Endianess, NetworkResult, ProbeResult, GIGA
@@ -26,6 +27,7 @@ from util import (
 
 from prepareImage import prepareImage
 from preEmulator import PreEmulator
+from emulationVerifier import makeNetworkMonitor
 
 
 from femu_extractor import extract
@@ -545,6 +547,23 @@ class Emulator:
 
         return self._exportFindings(probeResult, pre.getKernelPath(), foundServices, workDir)
 
+    def _runQemu(self, qemu: Qemu, initArg: str, logPath: str,
+                 networkResult: NetworkResult, timeout: int) -> None:
+        """Run QEMU with network-up notification, clean Ctrl+C and SIGTERM handling."""
+        def _sigterm(*_):
+            raise KeyboardInterrupt
+
+        old_handler = signal.signal(signal.SIGTERM, _sigterm)
+        try:
+            qemu.run(initArg, logPath, networkResult=networkResult, timeout=timeout,
+                     on_line=makeNetworkMonitor(networkResult))
+        except subprocess.TimeoutExpired:
+            logger.info("Session timed out")
+        except KeyboardInterrupt:
+            logger.info("Interrupted — QEMU shutting down")
+        finally:
+            signal.signal(signal.SIGTERM, old_handler)
+
     def boot(self) -> None:
         findings = self._loadFindings()
         if not findings:
@@ -557,11 +576,8 @@ class Emulator:
             return
         logPath = os.path.join(workDir, "qemu.boot.serial.log")
         self._logAccessInfo(findings)
-        logger.info(f"Booting firmware, log → {logPath}")
-        try:
-            qemu.run(initArg, logPath, networkResult=networkResult, timeout=86400)
-        except subprocess.TimeoutExpired:
-            logger.info("Boot session timed out")
+        logger.info(f"Booting firmware")
+        self._runQemu(qemu, initArg, logPath, networkResult, timeout=86400)
 
     def debug(self) -> None:
         findings = self._loadFindings()
@@ -575,11 +591,8 @@ class Emulator:
             return
         logPath = os.path.join(workDir, "qemu.debug.serial.log")
         self._logAccessInfo(findings)
-        logger.info(f"Booting firmware in debug mode (nc:31337, telnet:31338), log → {logPath}")
-        try:
-            qemu.run(initArg, logPath, networkResult=networkResult, timeout=86400)
-        except subprocess.TimeoutExpired:
-            logger.info("Debug session timed out")
+        logger.info(f"Booting firmware in debug mode (nc:31337, telnet:31338)")
+        self._runQemu(qemu, initArg, logPath, networkResult, timeout=86400)
 
     def analyze(self) -> None:
         findings = self._loadFindings()
