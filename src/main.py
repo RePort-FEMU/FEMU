@@ -20,7 +20,7 @@ extractorLogger.handlers[0].setFormatter(formater)
 
 def parseArguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FEMU: A tool for emulating and analyzing firmware.")
-    parser.add_argument("-m", "--mode", type=str, choices=["check", "run", "debug", "analyze"], help="Running mode: check (explore), run (boot), debug (boot+shell), analyze.", default="run")
+    parser.add_argument("-m", "--mode", type=str, choices=["check", "boot", "debug", "analyze"], help="Running mode: check (explore), boot, debug (boot+shell), analyze.", default="boot")
     parser.add_argument("-i", "--input", type=str, required=True, help="Path to the firmware image or directory.")
     parser.add_argument("-o", "--output", type=str, help="Output path for the results and images.", default="./output")
     parser.add_argument("-b", "--brand", type=str, help="Brand of the firmware (e.g., 'TP-Link', 'Netgear').", default="auto")
@@ -80,7 +80,7 @@ def main():
 
         modes = {
             "check":   em.explore,
-            "run":     em.boot,
+            "boot":    em.boot,
             "debug":   em.debug,
             "analyze": em.analyze,
         }
