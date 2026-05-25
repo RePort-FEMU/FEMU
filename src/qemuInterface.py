@@ -137,12 +137,17 @@ class Qemu:
         # --- probe / user networking ---
         if networkResult is None or networkResult.isUserNetwork:
             portfwd = ""
+            seen: set[int] = set()
             if networkResult:
-                seen: set[int] = set()
                 for port, proto in networkResult.ports:
                     if port not in seen:
                         portfwd += f",hostfwd={proto}::{port}-:{port}"
                         seen.add(port)
+            if self.debug:
+                for dbgPort in (31337, 31338):
+                    if dbgPort not in seen:
+                        portfwd += f",hostfwd=tcp::{dbgPort}-:{dbgPort}"
+                        seen.add(dbgPort)
             for i in range(numIfaces):
                 args += ["-device", f"{device},netdev=net{i}"]
                 args += ["-netdev",  f"user,id=net{i}{portfwd}"]
