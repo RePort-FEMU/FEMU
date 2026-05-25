@@ -2,7 +2,6 @@ import logging
 import os
 import argparse
 
-from common import RunningMode
 from dbInterface import checkConnection
 from emulator import Emulator
 from emulatorConfig import emulatorConfig
@@ -21,7 +20,7 @@ extractorLogger.handlers[0].setFormatter(formater)
 
 def parseArguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FEMU: A tool for emulating and analyzing firmware.")
-    parser.add_argument("-m", "--mode", type=str, choices=[mode.value for mode in RunningMode], help="Running mode of the emulator.", default=RunningMode.RUN.value)
+    parser.add_argument("-m", "--mode", type=str, choices=["check", "run", "debug", "analyze"], help="Running mode: check (explore), run (boot), debug (boot+shell), analyze.", default="run")
     parser.add_argument("-i", "--input", type=str, required=True, help="Path to the firmware image or directory.")
     parser.add_argument("-o", "--output", type=str, help="Output path for the results and images.", default="./output")
     parser.add_argument("-b", "--brand", type=str, help="Brand of the firmware (e.g., 'TP-Link', 'Netgear').", default="auto")
@@ -29,6 +28,7 @@ def parseArguments() -> argparse.Namespace:
     parser.add_argument("-bin", "--binaries", type=str, help="Path to the binaries directory.", default="../binaries")
     parser.add_argument("-sql", type=str, help="IP of postgreSQL database.", default=None)
     parser.add_argument("-p", "--port", type=int, help="Port of the postgreSQL database.", default=5432)
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode (nc/telnet shell access in guest).", default=False)
     
     args = parser.parse_args()
     return args
@@ -67,18 +67,24 @@ def main():
         
     for inputFile in inputFiles:
         em = Emulator(emulatorConfig(
-            runningMode=RunningMode(args.mode),
             firmwarePath=inputFile,
             outputPath=args.output,
             brand=args.brand,
             scriptsPath=args.scripts,
             binariesPath=args.binaries,
             sqlIP=args.sql,
-            sqlPort=args.port
+            sqlPort=args.port,
+            debug=args.debug,
         ))
         logger.info(f"Initialized emulator for {inputFile} in mode {args.mode} with brand {args.brand}.")
-        
-        em.run()
+
+        modes = {
+            "check":   em.explore,
+            "run":     em.boot,
+            "debug":   em.debug,
+            "analyze": em.analyze,
+        }
+        modes[args.mode]()
     
     
 

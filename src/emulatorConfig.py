@@ -1,7 +1,6 @@
 import logging
 import os
 
-from common import RunningMode
 from dbInterface import checkConnection
 
 # Use the root logger, do not set up a separate logger or handler here.
@@ -9,7 +8,6 @@ logger = logging.getLogger("FEMU")
 
 class emulatorConfig:
     def __init__(self,
-    runningMode: RunningMode, 
     firmwarePath: str,
     outputPath: str = "./output",
     brand: str = "auto",
@@ -19,7 +17,6 @@ class emulatorConfig:
     sqlPort: int = 5432,
     debug: bool = False,
     ):
-        self.runningMode: RunningMode = runningMode
         self.firmwarePath: str = firmwarePath
         self.outputPath: str = outputPath
         self.brand: str = brand

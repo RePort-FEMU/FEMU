@@ -3,8 +3,10 @@ import logging
 import shutil
 import os
 import sys
+import subprocess
 
-from common import RunningMode, Architecture, Endianess, NetworkResult, ProbeResult, GIGA
+from common import Architecture, Endianess, NetworkResult, ProbeResult, GIGA
+from qemuInterface import Qemu
 from dbInterface import DBInterface
 from emulatorConfig import emulatorConfig
 from util import (
@@ -340,7 +342,67 @@ class Emulator:
         logger.info(f"Findings exported to {findingsPath}")
         return findings
 
-    def run(self) -> dict | None:
+    # ------------------------------------------------------------------
+    # Findings helpers
+    # ------------------------------------------------------------------
+
+    def _loadFindings(self) -> dict | None:
+        """
+        Return findings dict for the current firmware without re-running exploration.
+        Fast path: scan existing workDir subdirs and match by firmware hash.
+        Slow path: extract to get iid, then load findings.json.
+        """
+        if os.path.isdir(self.workDir):
+            for subdir in os.listdir(self.workDir):
+                candidate = os.path.join(self.workDir, subdir, "findings.json")
+                if os.path.exists(candidate):
+                    with open(candidate) as f:
+                        findings = json.load(f)
+                    if findings.get("firmware", {}).get("hash") == self.hash:
+                        logger.info(f"Loaded findings from {candidate}")
+                        return findings
+
+        logger.info("No cached findings — extracting to locate them")
+        if not self.extract():
+            return None
+        findingsPath = os.path.join(self.getWorkDir(), "findings.json")
+        if not os.path.exists(findingsPath):
+            logger.error("No findings.json found — run in CHECK mode first")
+            return None
+        with open(findingsPath) as f:
+            return json.load(f)
+
+    def _buildQemuFromFindings(self, findings: dict,
+                                debug: bool = False) -> "tuple[Qemu, str, str, NetworkResult] | None":
+        """Reconstruct a Qemu instance + run parameters from findings.json."""
+        em  = findings["emulation"]
+        net = findings["network"]
+
+        arch = next((a for a in Architecture if str(a) == em["architecture"]), None)
+        end  = next((e for e in Endianess  if str(e) == em["endianness"]),    None)
+        if not arch or not end:
+            logger.error(f"Cannot reconstruct architecture from findings: "
+                         f"{em['architecture']}/{em['endianness']}")
+            return None
+
+        networkResult = NetworkResult(
+            networkType  = net["networkType"],
+            netBridge    = net["netBridge"],
+            netInterface = net["netInterface"],
+            candidates   = [(c["ip"], c["interface"], c["bridge"], c["vlans"], c["macs"])
+                            for c in net["candidates"]],
+            ports        = [(p["port"], p["proto"]) for p in net["ports"]],
+            isUserNetwork= net["isUserNetwork"],
+            hostIps      = net["hostIps"],
+        )
+        qemu = Qemu(em["imagePath"], arch, end, em["kernelPath"], em["workDir"], debug=debug)
+        return qemu, em["initArg"], em["workDir"], networkResult
+
+    # ------------------------------------------------------------------
+    # Modes
+    # ------------------------------------------------------------------
+
+    def explore(self) -> dict | None:
         logger.info(f"Running emulator for firmware: {self.config.firmwarePath}")
         
         logger.info(f"Step 1: Extracting firmware image {self.config.firmwarePath}")
@@ -363,7 +425,15 @@ class Emulator:
         logger.info("Step 2: preparing image for emulation")
         
         workDir = self.getWorkDir()
-        
+
+        findingsPath = os.path.join(workDir, "findings.json")
+        if os.path.exists(findingsPath):
+            answer = input(f"Findings already exist for this firmware. Re-run exploration? [y/N]: ").strip().lower()
+            if answer != "y":
+                logger.info("Skipping exploration — loading existing findings.")
+                with open(findingsPath) as f:
+                    return json.load(f)
+
         if os.path.isdir(os.path.join(workDir, "mnt")) and len(os.listdir(os.path.join(workDir, "mnt"))) > 0:
             unmountImage(os.path.join(workDir, "mnt"))
             shutil.rmtree(os.path.join(workDir, "mnt"), ignore_errors=True)
@@ -426,4 +496,46 @@ class Emulator:
         logger.info(f"Step 4: exporting findings")
 
         return self._exportFindings(probeResult, pre.getKernelPath(), foundServices, workDir)
-        
+
+    def boot(self) -> None:
+        findings = self._loadFindings()
+        if not findings:
+            return
+        result = self._buildQemuFromFindings(findings)
+        if not result:
+            return
+        qemu, initArg, workDir, networkResult = result
+        logPath = os.path.join(workDir, "qemu.boot.serial.log")
+        logger.info(f"Booting firmware, log → {logPath}")
+        try:
+            qemu.run(initArg, logPath, networkResult=networkResult, timeout=86400)
+        except subprocess.TimeoutExpired:
+            logger.info("Boot session timed out")
+
+    def debug(self) -> None:
+        findings = self._loadFindings()
+        if not findings:
+            return
+        result = self._buildQemuFromFindings(findings, debug=True)
+        if not result:
+            return
+        qemu, initArg, workDir, networkResult = result
+        logPath = os.path.join(workDir, "qemu.debug.serial.log")
+        logger.info(f"Booting firmware in debug mode (nc:31337, telnet:31338), log → {logPath}")
+        try:
+            qemu.run(initArg, logPath, networkResult=networkResult, timeout=86400)
+        except subprocess.TimeoutExpired:
+            logger.info("Debug session timed out")
+
+    def analyze(self) -> None:
+        findings = self._loadFindings()
+        if not findings:
+            return
+        fw  = findings["firmware"]
+        net = findings["network"]
+        logger.info(f"Firmware : {fw['path']}  iid={fw['iid']}  brand={fw['brand']}")
+        logger.info(f"Network  : type={net['networkType']}  userNet={net['isUserNetwork']}")
+        logger.info(f"IPs      : {[c['ip'] for c in net['candidates']]}")
+        logger.info(f"Ports    : {net['ports']}")
+        logger.info("Full analysis tooling not yet implemented")
+

@@ -1,14 +1,6 @@
 from enum import Enum
 from dataclasses import dataclass, field
 
-class RunningMode(Enum):
-    RUN = "run"
-    CHECK = "check"
-    ANALYZE = "analyze"
-    DEBUG = "debug"
-    def __str__(self):
-        return self.value
-    
 class Architecture(Enum):
     MIPS= ("MIPS", "mips")
     MIPS64 = ("MIPS64","mips64")
