@@ -42,15 +42,11 @@ def guestToHostPath(imagePath: str, path: str) -> str:
     Raises:
         ValueError: If the imagePath does not start with '/'.
     """
-    if not imagePath.startswith("/") or not path.startswith("/"):
-        logger.error(f"Root path {imagePath} or path {path} does not start with '/'.")
-        raise ValueError(f"Root path {imagePath} or path {path} does not start with '/'.")
-    
-    if not imagePath.endswith("/"):
-        imagePath += "/"
-        
-    fixedPath = path.replace("/", imagePath, 1)
-    return fixedPath
+    if not imagePath.startswith("/"):
+        logger.error(f"Root path {imagePath} does not start with '/'.")
+        raise ValueError(f"Root path {imagePath} does not start with '/'.")
+
+    return os.path.join(imagePath, path.lstrip("/"))
 
 def resolveGuestPath(imagePath: str, path: str) -> str:
     """

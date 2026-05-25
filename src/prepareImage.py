@@ -1,3 +1,4 @@
+import subprocess
 import logging
 import shutil
 import stat
@@ -302,6 +303,19 @@ def populateEtc(rootPath: str) -> None:
                 f.write(content)
                 logger.debug(f"Created essential file: {fullPath}")  
                 
+def _mknod(path: str, nodeType: int, perms: int, major: int, minor: int) -> None:
+    """Create a device node, falling back to sudo if the process lacks CAP_MKNOD."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        os.mknod(path, mode=nodeType | perms, device=os.makedev(major, minor))
+    except PermissionError:
+        kind = "b" if nodeType == stat.S_IFBLK else "c"
+        subprocess.run(["sudo", "mknod", path, kind, str(major), str(minor)],
+                       check=True, capture_output=True)
+        subprocess.run(["sudo", "chmod", oct(perms)[2:], path],
+                       check=True, capture_output=True)
+
+
 def populateDev(rootPath: str) -> None:
     """
     Populates the /dev directory with necessary files.
@@ -361,7 +375,7 @@ def populateDev(rootPath: str) -> None:
         for node, attrs in nodesToCreate.items():
             nodePath = readGuestLink(guestToHostPath(rootPath, node), rootPath)
             if not os.path.lexists(nodePath):
-                os.mknod(nodePath, mode=attrs["type"] | attrs["perms"], device=os.makedev(attrs["major"], attrs["minor"]))
+                _mknod(nodePath, attrs["type"], attrs["perms"], attrs["major"], attrs["minor"])
                 logger.debug(f"Created device node: {nodePath} with major: {attrs['major']} minor: {attrs['minor']}")
 
 
