@@ -165,7 +165,7 @@ class PreEmulator:
         self.backupFile: str | None = None
         self.backupData: str | None = None
         self.qemu = Qemu(self.imagePath, self.architecture, self.endiannes,
-                         self.getKernelPath(), self.workDir)
+                         self.getKernelPath(), self.workDir, debug=False)
 
     def getInitType(self, init: str) -> str:
         """Run the file command to determine the init type."""

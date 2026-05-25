@@ -22,11 +22,12 @@ def _isKernelPanic(line: str | None) -> bool:
 
 class Qemu:
     def __init__(self, imagePath: str, arch: Architecture, endiannes: Endianess,
-                 kernel: str, workDir: str = ""):
+                 kernel: str, workDir: str = "", debug: bool = False):
         self.imagePath    = imagePath
         self.architecture = arch
         self.endiannes    = endiannes
         self.kernelPath   = kernel
+        self.debug        = debug
         self.workDir      = workDir or tempfile.mkdtemp(prefix="femu-work-", dir="/tmp")
         self.tempdir      = tempfile.mkdtemp(prefix="femu-qemu-", dir="/tmp")
         self._tapDevices: list[tuple[str, str, int | None]] = []  # (tapName, hostNetdev, vlanId)
@@ -44,7 +45,7 @@ class Qemu:
         self._tapDevices = []
         pid = os.getpid()
 
-        for i, (ip, iface, bridge, vlans, macs) in enumerate(networkResult.candidates[:4]):
+        for i, (_ip, _iface, _bridge, vlans, _macs) in enumerate(networkResult.candidates[:4]):
             tapName    = f"femu{pid}_{i}"
             vlanId     = vlans[0] if vlans else None
             hostNetdev = f"{tapName}.{vlanId}" if vlanId else tapName
@@ -197,12 +198,13 @@ class Qemu:
             cmd.extend(["-drive", f"if=ide,file={self.imagePath},format=raw"])
 
         rootDev = "/dev/sda1" if self.architecture == Architecture.MIPS else "/dev/vda1"
+        debugFlag = "FIRMAE_DEBUG=true" if self.debug else "FIRMAE_DEBUG=false"
         cmd.extend(["-append",
                     f"firmadyne.syscall=27 root={rootDev} console=ttyS0 "
                     f"nandsim.parts=64,64,64,64,64,64,64,64,64,64 {initArg} rw debug "
                     f"ignore_loglevel print-fatal-signals=1 "
                     f"FIRMAE_NET=true FIRMAE_NVRAM=true FIRMAE_KERNEL=true FIRMAE_ETC=true "
-                    f"user_debug=31"])
+                    f"{debugFlag} user_debug=31"])
 
         cmd.extend(["-serial",  f"file:{logPath}"])
         cmd.extend(["-serial",  f"unix:{os.path.join(self.tempdir, 'qemu.S1')},server,nowait"])

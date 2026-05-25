@@ -17,6 +17,7 @@ class emulatorConfig:
     binariesPath: str = "../binaries",
     sqlIP: str | None = None,
     sqlPort: int = 5432,
+    debug: bool = False,
     ):
         self.runningMode: RunningMode = runningMode
         self.firmwarePath: str = firmwarePath
@@ -26,6 +27,7 @@ class emulatorConfig:
         self.binariesPath: str = binariesPath
         self.sqlIP: str | None = sqlIP
         self.sqlPort: int = sqlPort
+        self.debug: bool = debug
         
         # For all paths, get the absolute path
         self.firmwarePath = firmwarePath if firmwarePath.startswith("/") else os.path.abspath(f"./{firmwarePath}")
