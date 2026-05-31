@@ -189,6 +189,58 @@ ALTER SEQUENCE product_id_seq OWNED BY product.id;
 
 
 --
+-- Name: emulation; Type: TABLE; Schema: public; Owner: femu
+--
+
+CREATE TABLE emulation (
+    id SERIAL PRIMARY KEY,
+    iid INTEGER NOT NULL REFERENCES image(id) ON DELETE CASCADE,
+    stage VARCHAR NOT NULL,
+    network_type VARCHAR,
+    net_bridge VARCHAR,
+    net_interface VARCHAR,
+    is_user_network BOOLEAN,
+    init_arg VARCHAR,
+    ping_reachable BOOLEAN DEFAULT FALSE,
+    service_reachable BOOLEAN DEFAULT FALSE,
+    UNIQUE(iid)
+);
+
+ALTER TABLE public.emulation OWNER TO femu;
+
+
+--
+-- Name: network_candidate; Type: TABLE; Schema: public; Owner: femu
+--
+
+CREATE TABLE network_candidate (
+    id SERIAL PRIMARY KEY,
+    emulation_id INTEGER NOT NULL REFERENCES emulation(id) ON DELETE CASCADE,
+    ip VARCHAR NOT NULL,
+    interface VARCHAR NOT NULL,
+    bridge VARCHAR,
+    vlans TEXT,
+    macs TEXT
+);
+
+ALTER TABLE public.network_candidate OWNER TO femu;
+
+
+--
+-- Name: network_port; Type: TABLE; Schema: public; Owner: femu
+--
+
+CREATE TABLE network_port (
+    id SERIAL PRIMARY KEY,
+    emulation_id INTEGER NOT NULL REFERENCES emulation(id) ON DELETE CASCADE,
+    port INTEGER NOT NULL,
+    proto VARCHAR NOT NULL
+);
+
+ALTER TABLE public.network_port OWNER TO femu;
+
+
+--
 -- Name: id; Type: DEFAULT; Schema: public; Owner: femu
 --
 

@@ -297,6 +297,72 @@ class Emulator:
             logger.error(f"Failed to extract filesystem: {e}")
             return False
 
+    def _exportFindingsToDB(self, findings: dict) -> None:
+        if not self.config.sqlIP or not self.iid:
+            return
+        net = findings.get("network")
+        stage = findings.get("stage", "unknown")
+        reach = (net or {}).get("reachability", {})
+
+        try:
+            with DBInterface(self.config.sqlIP, self.config.sqlPort) as cur:
+                # Upsert into emulation
+                cur.execute("""
+                    INSERT INTO emulation
+                        (iid, stage, network_type, net_bridge, net_interface,
+                         is_user_network, init_arg, ping_reachable, service_reachable)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (iid) DO UPDATE SET
+                        stage            = EXCLUDED.stage,
+                        network_type     = EXCLUDED.network_type,
+                        net_bridge       = EXCLUDED.net_bridge,
+                        net_interface    = EXCLUDED.net_interface,
+                        is_user_network  = EXCLUDED.is_user_network,
+                        init_arg         = EXCLUDED.init_arg,
+                        ping_reachable   = EXCLUDED.ping_reachable,
+                        service_reachable= EXCLUDED.service_reachable
+                    RETURNING id
+                """, (
+                    int(self.iid) if self.iid.isdigit() else None,
+                    stage,
+                    net.get("networkType")     if net else None,
+                    net.get("netBridge")       if net else None,
+                    net.get("netInterface")    if net else None,
+                    net.get("isUserNetwork")   if net else None,
+                    findings.get("emulation", {}).get("initArg"),
+                    reach.get("ping",    False),
+                    reach.get("service", False),
+                ))
+                row = cur.fetchone()
+                if not row:
+                    return
+                emulation_id = row[0]
+
+                if net:
+                    cur.execute("DELETE FROM network_candidate WHERE emulation_id = %s", (emulation_id,))
+                    for c in net.get("candidates", []):
+                        cur.execute("""
+                            INSERT INTO network_candidate
+                                (emulation_id, ip, interface, bridge, vlans, macs)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (
+                            emulation_id, c["ip"], c["interface"], c["bridge"],
+                            ",".join(str(v) for v in c.get("vlans", [])),
+                            ",".join(str(m) for m in c.get("macs",  [])),
+                        ))
+
+                    cur.execute("DELETE FROM network_port WHERE emulation_id = %s", (emulation_id,))
+                    for p in net.get("ports", []):
+                        cur.execute("""
+                            INSERT INTO network_port (emulation_id, port, proto)
+                            VALUES (%s, %s, %s)
+                        """, (emulation_id, p["port"], p["proto"]))
+
+                cur.connection.commit()
+                logger.info(f"Emulation findings written to DB (emulation_id={emulation_id})")
+        except Exception as e:
+            logger.warning(f"Failed to export findings to DB: {e}")
+
     def _exportDir(self) -> str:
         """Return a valid export directory even if iid is not yet known."""
         if self.iid:
@@ -366,6 +432,7 @@ class Emulator:
         with open(findingsPath, "w") as f:
             json.dump(findings, f, indent=2)
         logger.info(f"Findings ({stage}) exported to {findingsPath}")
+        self._exportFindingsToDB(findings)
         return findings
 
     # ------------------------------------------------------------------
