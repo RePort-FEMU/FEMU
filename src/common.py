@@ -45,6 +45,8 @@ class ProbeResult:
     networkResult: "NetworkResult"
     modifiedGuestFile: str | None   # guest path of the injected init file
     injectedContent: str | None     # content appended to that file
+    pingReachable: bool = False     # ICMP ping responded during verify
+    serviceReachable: bool = False  # TCP/HTTP service responded during verify
 
 @dataclass
 class NetworkResult:

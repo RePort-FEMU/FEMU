@@ -373,11 +373,13 @@ class PreEmulator:
             })
 
             # --- verify reachability (mirrors check_emulation.sh) ---
-            reachable = verifyEmulation(initArg, networkResult, self.workDir, self.qemu.run)
+            pingReachable, serviceReachable = verifyEmulation(
+                initArg, networkResult, self.workDir, self.qemu.run)
             self._restoreBackupIfNeeded()
 
-            if reachable:
-                return ProbeResult(initArg, networkResult, modifiedGuestFile, injectedContent)
+            if serviceReachable:
+                return ProbeResult(initArg, networkResult, modifiedGuestFile, injectedContent,
+                                   pingReachable=pingReachable, serviceReachable=serviceReachable)
 
             logger.warning(f"Init {init} did not produce a reachable device — trying next")
 

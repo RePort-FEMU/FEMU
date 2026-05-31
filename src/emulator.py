@@ -297,30 +297,48 @@ class Emulator:
             logger.error(f"Failed to extract filesystem: {e}")
             return False
 
-    def _exportFindings(self, probeResult: ProbeResult, kernelPath: str,
-                        foundServices: dict, workDir: str) -> dict:
-        nr = probeResult.networkResult
-        findings = {
+    def _exportDir(self) -> str:
+        """Return a valid export directory even if iid is not yet known."""
+        if self.iid:
+            return self.getWorkDir()
+        fallback = os.path.join(self.workDir, self.hash)
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
+
+    def _exportFindings(self, stage: str, workDir: str | None = None,
+                        probeResult: ProbeResult | None = None,
+                        kernelPath: str = "",
+                        foundServices: dict | None = None) -> dict:
+        if workDir is None:
+            workDir = self._exportDir()
+
+        findings: dict = {
+            "stage": stage,
             "firmware": {
                 "path": self.config.firmwarePath,
                 "hash": self.hash,
                 "iid": self.iid,
                 "brand": self.brand,
             },
-            "emulation": {
+        }
+
+        if self.architecture != Architecture.UNKNOWN:
+            findings["emulation"] = {
                 "imagePath": os.path.join(workDir, "raw.img"),
                 "architecture": str(self.architecture),
                 "endianness": str(self.endianess),
                 "kernelPath": kernelPath,
-                "initArg": probeResult.initArg,
+                "initArg": probeResult.initArg if probeResult else "",
                 "workDir": workDir,
-            },
-            "initInjection": {
+            }
+
+        if probeResult:
+            findings["initInjection"] = {
                 "modifiedGuestFile": probeResult.modifiedGuestFile,
                 "injectedContent": probeResult.injectedContent,
-            },
-            "services": foundServices,
-            "network": {
+            }
+            nr = probeResult.networkResult
+            findings["network"] = {
                 "networkType": nr.networkType,
                 "netBridge": nr.netBridge,
                 "netInterface": nr.netInterface,
@@ -335,13 +353,19 @@ class Emulator:
                 ],
                 "isUserNetwork": nr.isUserNetwork,
                 "hostIps": nr.hostIps,
-            },
-        }
+                "reachability": {
+                    "ping": probeResult.pingReachable,
+                    "service": probeResult.serviceReachable,
+                },
+            }
+
+        if foundServices is not None:
+            findings["services"] = foundServices
 
         findingsPath = os.path.join(workDir, "findings.json")
         with open(findingsPath, "w") as f:
             json.dump(findings, f, indent=2)
-        logger.info(f"Findings exported to {findingsPath}")
+        logger.info(f"Findings ({stage}) exported to {findingsPath}")
         return findings
 
     # ------------------------------------------------------------------
@@ -454,51 +478,63 @@ class Emulator:
 
     def explore(self) -> dict | None:
         logger.info(f"Running emulator for firmware: {self.config.firmwarePath}")
-        
+
         logger.info(f"Step 1: Extracting firmware image {self.config.firmwarePath}")
         if not self.extract():
             logger.error("Extraction failed, aborting emulator run.")
+            self._exportFindings("extraction_failed")
             return
 
         if not self.collectInfo():
             logger.error("Failed to collect information, aborting emulator run.")
+            self._exportFindings("collect_info_failed")
             return
-        
+
         if not checkCompatibility(self.architecture, self.endianess):
             logger.error(f"Incompatible architecture or endianess: {self.architecture}, {self.endianess}")
+            self._exportFindings("incompatible_arch")
             return
-        
+
         if not self.dumpObjectsToDB():
             logger.error("Failed to dump objects to database.")
+            self._exportFindings("db_dump_failed")
             return
-                
+
         logger.info("Step 2: preparing image for emulation")
-        
+
         workDir = self.getWorkDir()
 
         findingsPath = os.path.join(workDir, "findings.json")
         if os.path.exists(findingsPath):
-            answer = input(f"Findings already exist for this firmware. Re-run exploration? [y/N]: ").strip().lower()
+            with open(findingsPath) as f:
+                existing = json.load(f)
+            stage = existing.get("stage", "unknown")
+            answer = input(
+                f"Findings already exist for this firmware (stage: {stage}). Re-run exploration? [y/N]: "
+            ).strip().lower()
             if answer != "y":
-                logger.info("Skipping exploration — loading existing findings.")
-                with open(findingsPath) as f:
-                    return json.load(f)
+                if stage == "success":
+                    logger.info("Skipping exploration — loading existing findings.")
+                    return existing
+                else:
+                    logger.info(f"Keeping existing findings (stage: {stage}) — aborting.")
+                    return None
 
         if os.path.isdir(os.path.join(workDir, "mnt")) and len(os.listdir(os.path.join(workDir, "mnt"))) > 0:
             unmountImage(os.path.join(workDir, "mnt"))
             shutil.rmtree(os.path.join(workDir, "mnt"), ignore_errors=True)
             logger.warning("Unmounted and removed existing mount directory.")
-                
+
         if os.path.exists(os.path.join(workDir, "raw.img")):
             logger.info("Removing existing raw image.")
             os.remove(os.path.join(workDir, "raw.img"))
             logger.info("Removed existing raw image successfully.")
-            
+
         createRawImg(os.path.join(workDir, "raw.img"), 1 * GIGA)
         os.makedirs(os.path.join(workDir, "mnt"), exist_ok=True)
-        
+
         with mountedImage(os.path.join(workDir, "raw.img"), os.path.join(workDir, "mnt")) as mp:
-            self.extractFs(mp) #TODO Possible leak here. Check return
+            self.extractFs(mp)
 
         res = prepareImage(
             os.path.join(workDir, "raw.img"),
@@ -512,6 +548,7 @@ class Emulator:
 
         if not res:
             logger.error("Failed to prepare image for emulation.")
+            self._exportFindings("prepare_failed", workDir=workDir)
             return
 
         foundInits, foundServices = res
@@ -532,20 +569,25 @@ class Emulator:
 
         if probeResult is None:
             logger.error("Pre-emulation probe failed for all inits — aborting.")
+            self._exportFindings("probe_failed", workDir=workDir, foundServices=foundServices)
             return
 
         nr = probeResult.networkResult
         logger.info(
             f"Network ready: type={nr.networkType} "
             f"bridge={nr.netBridge} iface={nr.netInterface} "
-            f"userNet={nr.isUserNetwork}"
+            f"userNet={nr.isUserNetwork} "
+            f"ping={probeResult.pingReachable} service={probeResult.serviceReachable}"
         )
         if nr.hostIps:
             logger.info(f"Host IPs: {', '.join(nr.hostIps)}")
-            
+
         logger.info(f"Step 4: exporting findings")
 
-        return self._exportFindings(probeResult, pre.getKernelPath(), foundServices, workDir)
+        return self._exportFindings("success", workDir=workDir,
+                                    probeResult=probeResult,
+                                    kernelPath=pre.getKernelPath(),
+                                    foundServices=foundServices)
 
     def _runQemu(self, qemu: Qemu, initArg: str, logPath: str,
                  networkResult: NetworkResult, timeout: int) -> None:
