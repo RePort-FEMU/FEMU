@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "femu"
+version = "0.1.0"
+description = "Firmware Emulation Framework"
+requires-python = ">=3.10"
+dependencies = [
+    "femu-extractor @ git+https://github.com/RePort-FEMU/extractor@397e40149c330ef8d3ed46d8bd0fd159340bd9d6",
+    "psycopg2-binary>=2.9.10",
+    "python-magic>=0.4.27",
+]
+
+[project.scripts]
+femu = "femu.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+femu = ["binaries/*", "scripts/firmadyne/*"]

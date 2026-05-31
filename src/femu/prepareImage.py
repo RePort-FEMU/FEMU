@@ -5,9 +5,9 @@ import stat
 import os
 import re
 
-from util import find, findDirs, strings, findStringInBinFile, mountedImage, runFsck
+from .util import find, findDirs, strings, findStringInBinFile, mountedImage, runFsck
 
-from guestUtils import  (
+from .guestUtils import  (
     guestToHostPath, 
     hostToGuestPath, 
     existsInGuest,
@@ -18,9 +18,9 @@ from guestUtils import  (
     readGuestLink
 )
 
-from common import Architecture, Endianess
+from .common import Architecture, Endianess
 
-logger = logging.getLogger("FEMU")
+logger = logging.getLogger(__name__)
 
 def initFirmadyne(rootPath: str) -> None:
     """

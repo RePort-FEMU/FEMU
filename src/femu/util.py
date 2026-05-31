@@ -9,11 +9,11 @@ import re
 
 from contextlib import contextmanager
 
-from common import Architecture, Endianess
+from .common import Architecture, Endianess
 
-from dbInterface import DBInterface
+from .dbInterface import DBInterface
 
-logger = logging.getLogger("FEMU")
+logger = logging.getLogger(__name__)
 
 def checkCompatibility(arch: Architecture, endianess: Endianess) -> bool:
     """

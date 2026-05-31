@@ -2,21 +2,23 @@ import logging
 import os
 import argparse
 
-from dbInterface import checkConnection
-from emulator import Emulator
-from emulatorConfig import emulatorConfig
+from .dbInterface import checkConnection
+from .emulator import Emulator
+from .emulatorConfig import emulatorConfig
 
-logger = logging.getLogger("FEMU")
+logger = logging.getLogger(__name__)
 
-logger.setLevel(logging.DEBUG)
-formater = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger.addHandler(logging.StreamHandler())
-logger.handlers[0].setFormatter(formater)
+# Configure the top-level "femu" logger so all femu.* submodules inherit the
+# handler and level, plus the extractor package.
+_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+_handler = logging.StreamHandler()
+_handler.setFormatter(_formatter)
 
-extractorLogger = logging.getLogger("femu_extractor")
-extractorLogger.setLevel(logging.DEBUG)
-extractorLogger.addHandler(logging.StreamHandler())
-extractorLogger.handlers[0].setFormatter(formater)
+logging.getLogger("femu").setLevel(logging.DEBUG)
+logging.getLogger("femu").addHandler(_handler)
+
+logging.getLogger("femu_extractor").setLevel(logging.DEBUG)
+logging.getLogger("femu_extractor").addHandler(_handler)
 
 def parseArguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FEMU: A tool for emulating and analyzing firmware.")

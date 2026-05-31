@@ -6,11 +6,11 @@ import sys
 import signal
 import subprocess
 
-from common import Architecture, Endianess, NetworkResult, ProbeResult, GIGA
-from qemuInterface import Qemu
-from dbInterface import DBInterface
-from emulatorConfig import emulatorConfig
-from util import (
+from .common import Architecture, Endianess, NetworkResult, ProbeResult, GIGA
+from .qemuInterface import Qemu
+from .dbInterface import DBInterface
+from .emulatorConfig import emulatorConfig
+from .util import (
     io_md5,
     checkArch,
     strings,
@@ -25,14 +25,14 @@ from util import (
     unmountImage,
 )
 
-from prepareImage import prepareImage
-from preEmulator import PreEmulator
-from emulationVerifier import makeNetworkMonitor
+from .prepareImage import prepareImage
+from .preEmulator import PreEmulator
+from .emulationVerifier import makeNetworkMonitor
 
 
 from femu_extractor import extract
 # Use the root logger, do not set up a separate logger or handler here.
-logger = logging.getLogger("FEMU")
+logger = logging.getLogger(__name__)
 
 class Emulator:
     def __init__(self, config: emulatorConfig):

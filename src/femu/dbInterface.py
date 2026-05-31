@@ -3,7 +3,7 @@ import logging
 
 from typing import Optional
 
-logger = logging.getLogger("FEMU")
+logger = logging.getLogger(__name__)
 
 # TODO: Make these configurable
 USERNAME = "femu"

@@ -8,9 +8,9 @@ import time
 import os
 from collections.abc import Callable
 
-from common import Architecture, Endianess, NetworkResult
+from .common import Architecture, Endianess, NetworkResult
 
-logger = logging.getLogger("FEMU")
+logger = logging.getLogger(__name__)
 
 
 def _isKernelPanic(line: str | None) -> bool:

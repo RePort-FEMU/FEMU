@@ -8,9 +8,9 @@ import urllib.request
 import urllib.error
 
 from collections.abc import Callable
-from common import NetworkResult
+from .common import NetworkResult
 
-logger = logging.getLogger("FEMU")
+logger = logging.getLogger(__name__)
 
 # Shared SSL context — firmware devices always use self-signed certs
 _SSL_CTX = ssl.create_default_context()

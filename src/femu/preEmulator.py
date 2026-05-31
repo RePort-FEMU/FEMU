@@ -6,16 +6,16 @@ import os
 
 from typing import Optional
 
-from util import mountedImage
-from guestUtils import hostToGuestPath, guestToHostPath
-from common import Endianess, Architecture, NetworkResult, ProbeResult
-from qemuInterface import Qemu
-from kernelLogUtils import findBridges, findInterfaceIps, findPorts, findMacChanges, findVLANs
-from emulationVerifier import verifyEmulation
+from .util import mountedImage
+from .guestUtils import hostToGuestPath, guestToHostPath
+from .common import Endianess, Architecture, NetworkResult, ProbeResult
+from .qemuInterface import Qemu
+from .kernelLogUtils import findBridges, findInterfaceIps, findPorts, findMacChanges, findVLANs
+from .emulationVerifier import verifyEmulation
 
 TIMEOUT = 300  # probe run timeout (5 minutes)
 
-logger = logging.getLogger("FEMU")
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

@@ -3,9 +3,9 @@ import struct
 import socket
 import logging
 
-from common import Endianess
+from .common import Endianess
 
-logger = logging.getLogger("FEMU")
+logger = logging.getLogger(__name__)
 
 # TODO: Possible optimization: Filter the lines before applying the full regex
 def findPorts(kernelLog:list[str]) -> list[tuple[int, str]]:
