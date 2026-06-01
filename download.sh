@@ -1,9 +1,14 @@
 #!/bin/sh
+# Usage: ./download.sh [target-dir]
+# Default target: src/femu/binaries/ (package data location)
 
 set -e
 
+DEST="${1:-./binaries}"
+mkdir -p "$DEST"
+
 download(){
- wget -N --continue -P./binaries/ $*
+ wget -N --continue -P"$DEST" "$@"
 }
 
 echo "Downloading binaries..."

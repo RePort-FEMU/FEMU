@@ -4,7 +4,7 @@ import argparse
 
 from .dbInterface import checkConnection
 from .emulator import Emulator
-from .emulatorConfig import emulatorConfig
+from .emulatorConfig import emulatorConfig, _DEFAULT_BINARIES, _DEFAULT_SCRIPTS
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +26,8 @@ def parseArguments() -> argparse.Namespace:
     parser.add_argument("-i", "--input", type=str, required=True, help="Path to the firmware image or directory.")
     parser.add_argument("-o", "--output", type=str, help="Output path for the results and images.", default="./output")
     parser.add_argument("-b", "--brand", type=str, help="Brand of the firmware (e.g., 'TP-Link', 'Netgear').", default="auto")
-    parser.add_argument("-s", "--scripts", type=str, help="Path to the scripts directory.", default="../scripts")
-    parser.add_argument("-bin", "--binaries", type=str, help="Path to the binaries directory.", default="../binaries")
+    parser.add_argument("-s", "--scripts", type=str, help="Path to the scripts directory.", default=_DEFAULT_SCRIPTS)
+    parser.add_argument("-bin", "--binaries", type=str, help="Path to the binaries directory.", default=_DEFAULT_BINARIES)
     parser.add_argument("-sql", type=str, help="IP of postgreSQL database.", default=None)
     parser.add_argument("-p", "--port", type=int, help="Port of the postgreSQL database.", default=5432)
     parser.add_argument("--debug", action="store_true", help="Enable debug mode (nc/telnet shell access in guest).", default=False)

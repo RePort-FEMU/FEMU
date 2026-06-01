@@ -6,20 +6,10 @@ from .dbInterface import checkConnection
 # Use the root logger, do not set up a separate logger or handler here.
 logger = logging.getLogger(__name__)
 
-# Resolve resource directories relative to this file so the package works
-# both as an editable dev install (src/femu/ → ../../binaries) and when
-# binaries/scripts are bundled alongside the package.
-_PKG_DIR  = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(os.path.dirname(_PKG_DIR))
+_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def _default_resource(name: str) -> str:
-    bundled = os.path.join(_PKG_DIR, name)
-    if os.path.isdir(bundled):
-        return bundled
-    return os.path.join(_REPO_ROOT, name)
-
-_DEFAULT_BINARIES = _default_resource("binaries")
-_DEFAULT_SCRIPTS  = _default_resource("scripts")
+_DEFAULT_BINARIES = "./binaries"                        # resolved at runtime from CWD
+_DEFAULT_SCRIPTS  = os.path.join(_PKG_DIR, "scripts")  # bundled inside the package
 
 class emulatorConfig:
     def __init__(self,
@@ -47,6 +37,17 @@ class emulatorConfig:
         self.scriptsPath   = os.path.abspath(scriptsPath)
         self.binariesPath  = os.path.abspath(binariesPath)
         
+        if not os.path.isdir(self.binariesPath) or not os.listdir(self.binariesPath):
+            raise FileNotFoundError(
+                f"Binaries directory not found or empty: {self.binariesPath}\n\n"
+                f"Download the required binaries with:\n"
+                f"  curl -fsSL https://raw.githubusercontent.com/RePort-FEMU/FEMU/main/download.sh | sh\n\n"
+                f"Or clone the repo and run download.sh directly:\n"
+                f"  git clone https://github.com/RePort-FEMU/FEMU && cd FEMU && ./download.sh\n\n"
+                f"To use a custom binaries directory:\n"
+                f"  femu --binaries <path> ...\n"
+            )
+
         if self.sqlIP is None or self.sqlIP == "":
             logger.warning("No PostgreSQL IP provided. Some features may not work.")
             self.sqlIP = None
