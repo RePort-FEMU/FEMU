@@ -118,26 +118,39 @@ femu -m check -i firmware.bin -sql 127.0.0.1 -p 4321
 
 ## Docker
 
-Build and run without installing any system dependencies locally:
+### Using the pre-built image
+
+```bash
+docker run --rm \
+    --privileged \
+    --device /dev/net/tun \
+    -v "$(pwd):/workspace" \
+    -w /workspace \
+    ghcr.io/rePort-FEMU/FEMU:main \
+    -m check -i ./firmwares/router.bin -o ./output
+```
+
+`--privileged` is required for TAP interface setup and image mounting inside the container.
+
+### Using femu.sh (recommended)
+
+`femu.sh` is a convenience wrapper that handles the `docker run` flags, auto-detects the postgres container, and optionally builds the image locally:
 
 ```bash
 # Start the database (once)
 ./install.sh
 
-# Run FEMU (builds the image automatically on first run)
+# Build locally and run
 ./femu.sh -m check -i ./firmwares/router.bin -o ./output
+
+# Or use the pre-built registry image
+FEMU_IMAGE=ghcr.io/rePort-FEMU/FEMU:main ./femu.sh -m check -i ./firmwares/router.bin
 ```
 
 The `femu.sh` script:
-- Builds the Docker image if it does not exist
+- Builds the Docker image if it does not exist locally
 - Auto-detects and connects to the running `femu-postgres` container
-- Mounts your current directory into the container so paths work as-is
-
-Pull the pre-built image:
-
-```bash
-docker pull ghcr.io/rePort-FEMU/FEMU:main
-```
+- Mounts your current directory into the container so relative paths work as-is
 
 ---
 
