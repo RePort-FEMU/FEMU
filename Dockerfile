@@ -28,7 +28,7 @@ COPY . .
 RUN ./download.sh /femu/binaries
 
 # Install FEMU and its Python dependencies
-RUN pip3 install --no-cache-dir -e .
+RUN pip3 install --no-cache-dir .
 
 # Running as root inside the container so sudo commands work without a password
 # (root calling sudo is a no-op privilege-wise but satisfies the subprocess calls)
