@@ -5,8 +5,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Python runtime + build tools for pip git installs
-    python3 python3-pip python3.10-venv git wget \
+    # Python runtime + build tools (build-essential needed for femu-extractor Rust/maturin compile)
+    python3 python3-pip python3.10-venv git wget build-essential \
     # QEMU emulators (arm, mipseb, mipsel)
     qemu-system-arm qemu-system-mips \
     # Image preparation: loop devices, ext2 filesystem creation
