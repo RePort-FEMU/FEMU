@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Python runtime + build tools for pip git installs
-    python3 python3-pip git wget \
+    python3 python3-pip python3.10-venv git wget \
     # QEMU emulators (arm, mipseb, mipsel)
     qemu-system-arm qemu-system-mips \
     # Image preparation: loop devices, ext2 filesystem creation
