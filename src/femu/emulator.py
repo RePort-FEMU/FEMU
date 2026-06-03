@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import shutil
@@ -8,10 +9,9 @@ import subprocess
 
 from .common import Architecture, Endianess, NetworkResult, ProbeResult, GIGA
 from .qemuInterface import Qemu
-from .dbInterface import DBInterface
 from .emulatorConfig import emulatorConfig
+from .db import upsertBrand, upsertImage, updateImageField, getBrandByHash
 from .util import (
-    io_md5,
     checkArch,
     strings,
     checkCompatibility,
@@ -40,38 +40,37 @@ logger = logging.getLogger(__name__)
 
 class Emulator:
     def __init__(self, config: emulatorConfig):
-        # Information about the emulator environment
         self.config = config
-        self.hash = io_md5(self.config.firmwarePath)
-        
-        self.imagePath = os.path.join(self.config.outputPath, "images")
-        self.workDir = os.path.join(self.config.outputPath, "workDir")
-        
 
-        # Create directories for images and scratch space
+        with open(self.config.firmwarePath, "rb") as f:
+            self.tag = hashlib.sha256(f.read()).hexdigest()
+
+        self.imagePath = os.path.join(self.config.outputPath, "images")
+        self.workDir   = os.path.join(self.config.outputPath, "workDir")
+
         self.createDirectories()
 
         if self.config.brand == "auto":
             if self.config.sqlIP:
-                self.brand = self.detectBrand()
+                self.brand = getBrandByHash(self.tag, self.config.sqlIP, self.config.sqlPort) or "unknown"
             else:
-                logger.warning("Brand detection is set to 'auto', but no database IP provided. Defaulting to 'unknown'.")
+                logger.warning("Brand detection requires a database — defaulting to 'unknown'.")
                 self.brand = "unknown"
         else:
             self.brand = self.config.brand
-                
-        # Information about the firmware image
-        self.iid = None
+
+        # Set after extraction
+        self.db_id: int | None = None
         self.kernelPath = None
         self.filesystemPath = None
-        
+
         self.architecture = Architecture.UNKNOWN
-        self.endianess = Endianess.UNKNOWN
-        
+        self.endianess    = Endianess.UNKNOWN
+
         self.kernelVersion = ""
         self.kernelVersionString = ""
         self.inferredKernelInit = []
-        self.inferredKernelInitStrings = []        
+        self.inferredKernelInitStrings = []
           
     def createDirectories(self):
         # Create necessary directories for images and scratch space
@@ -91,100 +90,68 @@ class Emulator:
                 logger.error(f"Failed to create work directory: {e}")
                 raise
             
-    def detectBrand(self):
-        # Check if the firmware's hash is in the database
-        if not self.config.sqlIP:
-            logger.warning("No database IP provided. Cannot detect brand.")
-            return "unknown"
-        
-        with DBInterface(self.config.sqlIP, self.config.sqlPort) as cur:
-            cur.execute("SELECT brand_id FROM image WHERE hash = %s", (self.hash,))
-            brand_id = cur.fetchone()
+    def _updateDbField(self, field: str, value: str) -> bool:
+        if not self.config.sqlIP or not self.db_id:
+            return True
+        return updateImageField(self.db_id, field, value, self.config.sqlIP, self.config.sqlPort)
 
-            if brand_id:
-                cur.execute("SELECT name FROM brand WHERE id = %s", (brand_id[0],))
-                brand = cur.fetchone()
-                if brand:
-                    return brand[0]
-        return "unknown"
-    
-    def updateDbImageInfo(self, field: str, value: str):
-        if not self.config.sqlIP:
-            return True  # No database IP provided, skip update
-        
-        logger.debug(f"Updating database image info: {field} = {value} for image ID {self.iid}")
-        if not self.iid:
-            logger.error("Image ID is not set. Cannot update database image info.")
-            return False
-
-        with DBInterface(self.config.sqlIP, self.config.sqlPort) as cur:
-            try:
-                cur.execute(f"UPDATE image SET {field} = %s WHERE id = %s", (value, self.iid))
-                cur.connection.commit()
-                logger.info(f"Database updated successfully: {field} = {value}")
-                return True
-            except Exception as e:
-                cur.connection.rollback()
-                logger.error(f"Failed to update database: {e}")
-                return False
-    
-    def extract(self):
-        # Extract the kernel and rootfs from the firmware image
+    def extract(self) -> bool:
         logger.info(f"Extracting firmware image: {self.config.firmwarePath}")
-        
-        # First extract the filesystem without the kernel
-        result = extract(self.config.firmwarePath, self.imagePath, kernel=False, sqlIP=self.config.sqlIP, sqlPort=self.config.sqlPort, brand=self.config.brand, quiet=True)[0]
-        self.iid = str(result["tag"])
-        
+
+        result = extract(self.config.firmwarePath, self.imagePath, kernel=False, quiet=True)[0]
         if not result["status"]:
             logger.error(f"Failed to extract filesystem from {self.config.firmwarePath}")
             return False
-
         self.filesystemPath = str(result["rootfsPath"])
         logger.debug(f"Root filesystem extracted to: {self.filesystemPath}")
 
-        # Now extract the kernel
-        logger.info(f"Extracting kernel from firmware image: {self.config.firmwarePath}")
-        result = extract(self.config.firmwarePath, self.imagePath, filesystem=False, sqlIP=self.config.sqlIP, sqlPort=self.config.sqlPort, brand=self.config.brand, quiet=True)[0]
-
+        result = extract(self.config.firmwarePath, self.imagePath, filesystem=False, quiet=True)[0]
         if not result["status"]:
             logger.error(f"Failed to extract kernel from {self.config.firmwarePath}")
-            if self.filesystemPath:
-                shutil.rmtree(self.filesystemPath, ignore_errors=True)
+            shutil.rmtree(self.filesystemPath, ignore_errors=True)
+            self.filesystemPath = None
             return False
-        
         self.kernelPath = str(result["kernelPath"])
         logger.debug(f"Kernel extracted to: {self.kernelPath}")
 
         if not self.kernelPath or not self.filesystemPath:
-            logger.error("Extraction failed: Kernel or root filesystem path is empty.")
+            logger.error("Extraction failed: paths are empty.")
             return False
-        
-        logger.info(f"Extraction completed successfully. Kernel: {self.kernelPath}, RootFS: {self.filesystemPath}")
 
+        # Register in DB now that we have a successful extraction
+        if self.config.sqlIP:
+            brandId = upsertBrand(self.brand, self.config.sqlIP, self.config.sqlPort)
+            if brandId:
+                self.db_id = upsertImage(
+                    self.tag,
+                    os.path.basename(self.config.firmwarePath),
+                    self.tag,
+                    brandId,
+                    self.config.sqlIP,
+                    self.config.sqlPort,
+                )
+                if self.db_id:
+                    updateImageField(self.db_id, "rootfs_extracted", "true",
+                                     self.config.sqlIP, self.config.sqlPort)
+                    updateImageField(self.db_id, "kernel_extracted", "true",
+                                     self.config.sqlIP, self.config.sqlPort)
+
+        logger.info(f"Extraction complete — kernel: {self.kernelPath}, rootfs: {self.filesystemPath}")
         return True
     
     def inferArchitecture(self):
-        # Infer the architecture and endianess of the firmware
-        logger.info(f"Inferring architecture for firmware: {self.config.firmwarePath}")
-        
-        if not self.iid:
-            logger.error("Image ID is not set. Cannot infer architecture.")
-            return False
-        
         if not self.filesystemPath:
             logger.error("Filesystem path is not set. Cannot infer architecture.")
             return False
-        
-        self.architecture, self.endianess = checkArch(self.filesystemPath, self.iid)
-        
+
+        self.architecture, self.endianess = checkArch(self.filesystemPath, self.tag)
+
         if self.architecture == Architecture.UNKNOWN or self.endianess == Endianess.UNKNOWN:
-            logger.error("Failed to determine architecture or endianess of the firmware.")
+            logger.error("Failed to determine architecture or endianness.")
             return False
-        
-        self.updateDbImageInfo("arch", str(self.architecture) + str(self.endianess))
-        
-        logger.info(f"Inferred Architecture: {self.architecture}, Endianess: {self.endianess}")
+
+        self._updateDbField("arch", str(self.architecture) + str(self.endianess))
+        logger.info(f"Architecture: {self.architecture}, Endianness: {self.endianess}")
         return True
     
     def inferKernelVersion(self):
@@ -217,16 +184,14 @@ class Emulator:
             logger.warning("Kernel version could not be inferred from the kernel image.")
             return False
         else:
-            self.updateDbImageInfo("kernel_version", self.kernelVersion)
+            self._updateDbField("kernel_version", self.kernelVersion)
 
         return True
 
     def collectInfo(self):
-        # Collect information about the firmware
         logger.info(f"Collecting information for firmware: {self.config.firmwarePath}")
-        
-        if not self.iid or not self.kernelPath or not self.filesystemPath:
-            logger.error("Image ID, kernel path, or root filesystem path is not set. Cannot collect information.")
+
+        if not self.kernelPath or not self.filesystemPath:
             logger.error("Extraction must be run before collecting information.")
             return False
 
@@ -242,43 +207,26 @@ class Emulator:
     
     def dumpObjectsToDB(self):
         if not self.config.sqlIP:
-            logger.warning("No database IP provided, skipping database updates.")
+            logger.warning("No database IP provided, skipping filesystem dump.")
             return True
-        
-        if not self.iid:
-            logger.error("Image ID is not set. Cannot dump objects to database.")
-            return False
-        
-        if not self.filesystemPath:
-            logger.error("Filesystem path is not set. Cannot dump objects to database.")
-            return False
-        
-        logger.info("Dumping objects to database.")
-        
-        fileInfo = getFilesInfo(self.filesystemPath)
-        objectsIds, _ = getObjectIds(fileInfo, self.config.sqlIP, self.config.sqlPort)
 
-        insertObjectsToImage(self.iid, objectsIds, fileInfo, self.config.sqlIP, self.config.sqlPort)
+        if not self.db_id or not self.filesystemPath:
+            logger.error("DB id or filesystem path not set — run extract() first.")
+            return False
+
+        logger.info("Dumping filesystem objects to database.")
+        fileInfo = getFilesInfo(self.filesystemPath)
+        objectIds, _ = getObjectIds(fileInfo, self.config.sqlIP, self.config.sqlPort)
+        insertObjectsToImage(self.db_id, objectIds, fileInfo, self.config.sqlIP, self.config.sqlPort)
 
         linkInfo = getLinksInfo(self.filesystemPath)
-        insertLinksToImage(self.iid, linkInfo, self.config.sqlIP, self.config.sqlPort)
-        
+        insertLinksToImage(self.db_id, linkInfo, self.config.sqlIP, self.config.sqlPort)
         return True
         
     def getWorkDir(self) -> str:
-        if not self.iid:
-            logger.error("Image ID is not set. Cannot create work directory.")
-            return ""
-            
-        if not os.path.exists(os.path.join(self.workDir, self.iid)):
-            try:
-                os.makedirs(os.path.join(self.workDir, self.iid))
-                logger.info(f"Work subdirectory created for IID: {self.iid}")
-            except Exception as e:
-                logger.error(f"Failed to create work subdirectory: {e}")
-                raise
-
-        return os.path.join(self.workDir, self.iid)
+        path = os.path.join(self.workDir, self.tag)
+        os.makedirs(path, exist_ok=True)
+        return path
 
     def extractFs(self, dst: str):
         if not self.filesystemPath:
@@ -306,12 +254,12 @@ class Emulator:
                         kernelPath: str = "",
                         foundServices: dict | None = None) -> dict:
         if workDir is None:
-            workDir = getExportDir(self.workDir, self.iid, self.hash)
-        findings = buildFindings(stage, workDir, self.config.firmwarePath, self.hash,
-                                 self.iid, self.brand, self.architecture, self.endianess,
+            workDir = getExportDir(self.workDir, self.tag)
+        findings = buildFindings(stage, workDir, self.config.firmwarePath,
+                                 self.tag, self.brand, self.architecture, self.endianess,
                                  probeResult, kernelPath, foundServices)
         saveFindings(findings, workDir)
-        saveFindingsToDB(findings, self.config.sqlIP, self.config.sqlPort, self.iid)
+        saveFindingsToDB(findings, self.config.sqlIP, self.config.sqlPort, self.db_id)
         return findings
 
     # ------------------------------------------------------------------
@@ -319,13 +267,13 @@ class Emulator:
     # ------------------------------------------------------------------
 
     def _loadFindings(self) -> dict | None:
-        findings = loadFindings(self.workDir, self.hash)
+        findings = loadFindings(self.workDir, self.tag)
         if findings:
             return findings
         logger.info("No cached findings — extracting to locate them")
         if not self.extract():
             return None
-        findings = loadFindings(self.workDir, self.hash)
+        findings = loadFindings(self.workDir, self.tag)
         if not findings:
             logger.error("No findings.json found — run in CHECK mode first")
             return None

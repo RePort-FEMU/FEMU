@@ -8,12 +8,13 @@ version = "0.1.0"
 description = "Firmware Emulation Framework"
 requires-python = ">=3.10"
 
-[project.urls]
-Repository = "https://github.com/RePort-FEMU/FEMU"
 dependencies = [
-    "femu-extractor @ git+https://github.com/RePort-FEMU/extractor@397e40149c330ef8d3ed46d8bd0fd159340bd9d6",
+    "femu-extractor @ git+https://github.com/RePort-FEMU/extractor@e523434a5edec60bee558c6ce042211f403d2baa",
     "psycopg2-binary>=2.9",
 ]
+
+[project.urls]
+Repository = "https://github.com/RePort-FEMU/FEMU"
 
 [project.scripts]
 femu = "femu.main:main"
@@ -23,3 +24,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 femu = ["binaries/*", "scripts/firmadyne/*", "scripts/firmadyne/**/*"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

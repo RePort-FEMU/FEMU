@@ -13,10 +13,8 @@ logger = logging.getLogger(__name__)
 # Directory helpers
 # ---------------------------------------------------------------------------
 
-def getExportDir(workDir: str, iid: str | None, firmwareHash: str) -> str:
-    """Return a writable export directory regardless of whether iid is known yet."""
-    subdir = iid if iid else firmwareHash
-    path = os.path.join(workDir, subdir)
+def getExportDir(workDir: str, tag: str) -> str:
+    path = os.path.join(workDir, tag)
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -29,8 +27,7 @@ def buildFindings(
     stage: str,
     workDir: str,
     firmwarePath: str,
-    firmwareHash: str,
-    iid: str | None,
+    tag: str,
     brand: str,
     architecture: Architecture,
     endianness: Endianess,
@@ -42,8 +39,7 @@ def buildFindings(
         "stage": stage,
         "firmware": {
             "path": firmwarePath,
-            "hash": firmwareHash,
-            "iid": iid,
+            "tag": tag,
             "brand": brand,
         },
     }
@@ -99,8 +95,8 @@ def saveFindings(findings: dict, workDir: str) -> None:
 
 
 def saveFindingsToDB(findings: dict, sqlIP: str | None, sqlPort: int,
-                     iid: str | None) -> None:
-    if not sqlIP or not iid:
+                     dbId: int | None) -> None:
+    if not sqlIP or not dbId:
         return
     net = findings.get("network")
     stage = findings.get("stage", "unknown")
@@ -124,7 +120,7 @@ def saveFindingsToDB(findings: dict, sqlIP: str | None, sqlPort: int,
                     service_reachable= EXCLUDED.service_reachable
                 RETURNING id
             """, (
-                int(iid) if iid.isdigit() else None,
+                dbId,
                 stage,
                 net.get("networkType")   if net else None,
                 net.get("netBridge")     if net else None,
@@ -169,8 +165,8 @@ def saveFindingsToDB(findings: dict, sqlIP: str | None, sqlPort: int,
 # Load
 # ---------------------------------------------------------------------------
 
-def loadFindings(workDir: str, firmwareHash: str) -> dict | None:
-    """Scan workDir subdirectories for a findings.json matching firmwareHash."""
+def loadFindings(workDir: str, tag: str) -> dict | None:
+    """Scan workDir subdirectories for a findings.json matching the firmware tag."""
     if not os.path.isdir(workDir):
         return None
     for subdir in os.listdir(workDir):
@@ -178,7 +174,7 @@ def loadFindings(workDir: str, firmwareHash: str) -> dict | None:
         if os.path.exists(candidate):
             with open(candidate) as f:
                 findings = json.load(f)
-            if findings.get("firmware", {}).get("hash") == firmwareHash:
+            if findings.get("firmware", {}).get("tag") == tag:
                 logger.info(f"Loaded findings from {candidate}")
                 return findings
     return None
