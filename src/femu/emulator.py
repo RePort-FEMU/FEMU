@@ -28,6 +28,10 @@ from .util import (
 from .prepareImage import prepareImage
 from .preEmulator import PreEmulator
 from .emulationVerifier import makeNetworkMonitor
+from .findings import (
+    getExportDir, buildFindings, saveFindings, saveFindingsToDB,
+    loadFindings, buildQemuFromFindings,
+)
 
 
 from femu_extractor import extract
@@ -297,142 +301,17 @@ class Emulator:
             logger.error(f"Failed to extract filesystem: {e}")
             return False
 
-    def _exportFindingsToDB(self, findings: dict) -> None:
-        if not self.config.sqlIP or not self.iid:
-            return
-        net = findings.get("network")
-        stage = findings.get("stage", "unknown")
-        reach = (net or {}).get("reachability", {})
-
-        try:
-            with DBInterface(self.config.sqlIP, self.config.sqlPort) as cur:
-                # Upsert into emulation
-                cur.execute("""
-                    INSERT INTO emulation
-                        (iid, stage, network_type, net_bridge, net_interface,
-                         is_user_network, init_arg, ping_reachable, service_reachable)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (iid) DO UPDATE SET
-                        stage            = EXCLUDED.stage,
-                        network_type     = EXCLUDED.network_type,
-                        net_bridge       = EXCLUDED.net_bridge,
-                        net_interface    = EXCLUDED.net_interface,
-                        is_user_network  = EXCLUDED.is_user_network,
-                        init_arg         = EXCLUDED.init_arg,
-                        ping_reachable   = EXCLUDED.ping_reachable,
-                        service_reachable= EXCLUDED.service_reachable
-                    RETURNING id
-                """, (
-                    int(self.iid) if self.iid.isdigit() else None,
-                    stage,
-                    net.get("networkType")     if net else None,
-                    net.get("netBridge")       if net else None,
-                    net.get("netInterface")    if net else None,
-                    net.get("isUserNetwork")   if net else None,
-                    findings.get("emulation", {}).get("initArg"),
-                    reach.get("ping",    False),
-                    reach.get("service", False),
-                ))
-                row = cur.fetchone()
-                if not row:
-                    return
-                emulation_id = row[0]
-
-                if net:
-                    cur.execute("DELETE FROM network_candidate WHERE emulation_id = %s", (emulation_id,))
-                    for c in net.get("candidates", []):
-                        cur.execute("""
-                            INSERT INTO network_candidate
-                                (emulation_id, ip, interface, bridge, vlans, macs)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                        """, (
-                            emulation_id, c["ip"], c["interface"], c["bridge"],
-                            ",".join(str(v) for v in c.get("vlans", [])),
-                            ",".join(str(m) for m in c.get("macs",  [])),
-                        ))
-
-                    cur.execute("DELETE FROM network_port WHERE emulation_id = %s", (emulation_id,))
-                    for p in net.get("ports", []):
-                        cur.execute("""
-                            INSERT INTO network_port (emulation_id, port, proto)
-                            VALUES (%s, %s, %s)
-                        """, (emulation_id, p["port"], p["proto"]))
-
-                cur.connection.commit()
-                logger.info(f"Emulation findings written to DB (emulation_id={emulation_id})")
-        except Exception as e:
-            logger.warning(f"Failed to export findings to DB: {e}")
-
-    def _exportDir(self) -> str:
-        """Return a valid export directory even if iid is not yet known."""
-        if self.iid:
-            return self.getWorkDir()
-        fallback = os.path.join(self.workDir, self.hash)
-        os.makedirs(fallback, exist_ok=True)
-        return fallback
-
     def _exportFindings(self, stage: str, workDir: str | None = None,
                         probeResult: ProbeResult | None = None,
                         kernelPath: str = "",
                         foundServices: dict | None = None) -> dict:
         if workDir is None:
-            workDir = self._exportDir()
-
-        findings: dict = {
-            "stage": stage,
-            "firmware": {
-                "path": self.config.firmwarePath,
-                "hash": self.hash,
-                "iid": self.iid,
-                "brand": self.brand,
-            },
-        }
-
-        if self.architecture != Architecture.UNKNOWN:
-            findings["emulation"] = {
-                "imagePath": os.path.join(workDir, "raw.img"),
-                "architecture": str(self.architecture),
-                "endianness": str(self.endianess),
-                "kernelPath": kernelPath,
-                "initArg": probeResult.initArg if probeResult else "",
-                "workDir": workDir,
-            }
-
-        if probeResult:
-            findings["initInjection"] = {
-                "modifiedGuestFile": probeResult.modifiedGuestFile,
-                "injectedContent": probeResult.injectedContent,
-            }
-            nr = probeResult.networkResult
-            findings["network"] = {
-                "networkType": nr.networkType,
-                "netBridge": nr.netBridge,
-                "netInterface": nr.netInterface,
-                "candidates": [
-                    {"ip": ip, "interface": iface, "bridge": bridge,
-                     "vlans": vlans, "macs": macs}
-                    for ip, iface, bridge, vlans, macs in nr.candidates
-                ],
-                "ports": [
-                    {"port": port, "proto": proto}
-                    for port, proto in nr.ports
-                ],
-                "isUserNetwork": nr.isUserNetwork,
-                "hostIps": nr.hostIps,
-                "reachability": {
-                    "ping": probeResult.pingReachable,
-                    "service": probeResult.serviceReachable,
-                },
-            }
-
-        if foundServices is not None:
-            findings["services"] = foundServices
-
-        findingsPath = os.path.join(workDir, "findings.json")
-        with open(findingsPath, "w") as f:
-            json.dump(findings, f, indent=2)
-        logger.info(f"Findings ({stage}) exported to {findingsPath}")
-        self._exportFindingsToDB(findings)
+            workDir = getExportDir(self.workDir, self.iid, self.hash)
+        findings = buildFindings(stage, workDir, self.config.firmwarePath, self.hash,
+                                 self.iid, self.brand, self.architecture, self.endianess,
+                                 probeResult, kernelPath, foundServices)
+        saveFindings(findings, workDir)
+        saveFindingsToDB(findings, self.config.sqlIP, self.config.sqlPort, self.iid)
         return findings
 
     # ------------------------------------------------------------------
@@ -440,56 +319,17 @@ class Emulator:
     # ------------------------------------------------------------------
 
     def _loadFindings(self) -> dict | None:
-        """
-        Return findings dict for the current firmware without re-running exploration.
-        Fast path: scan existing workDir subdirs and match by firmware hash.
-        Slow path: extract to get iid, then load findings.json.
-        """
-        if os.path.isdir(self.workDir):
-            for subdir in os.listdir(self.workDir):
-                candidate = os.path.join(self.workDir, subdir, "findings.json")
-                if os.path.exists(candidate):
-                    with open(candidate) as f:
-                        findings = json.load(f)
-                    if findings.get("firmware", {}).get("hash") == self.hash:
-                        logger.info(f"Loaded findings from {candidate}")
-                        return findings
-
+        findings = loadFindings(self.workDir, self.hash)
+        if findings:
+            return findings
         logger.info("No cached findings — extracting to locate them")
         if not self.extract():
             return None
-        findingsPath = os.path.join(self.getWorkDir(), "findings.json")
-        if not os.path.exists(findingsPath):
+        findings = loadFindings(self.workDir, self.hash)
+        if not findings:
             logger.error("No findings.json found — run in CHECK mode first")
             return None
-        with open(findingsPath) as f:
-            return json.load(f)
-
-    def _buildQemuFromFindings(self, findings: dict,
-                                debug: bool = False) -> "tuple[Qemu, str, str, NetworkResult] | None":
-        """Reconstruct a Qemu instance + run parameters from findings.json."""
-        em  = findings["emulation"]
-        net = findings["network"]
-
-        arch = next((a for a in Architecture if str(a) == em["architecture"]), None)
-        end  = next((e for e in Endianess  if str(e) == em["endianness"]),    None)
-        if not arch or not end:
-            logger.error(f"Cannot reconstruct architecture from findings: "
-                         f"{em['architecture']}/{em['endianness']}")
-            return None
-
-        networkResult = NetworkResult(
-            networkType  = net["networkType"],
-            netBridge    = net["netBridge"],
-            netInterface = net["netInterface"],
-            candidates   = [(c["ip"], c["interface"], c["bridge"], c["vlans"], c["macs"])
-                            for c in net["candidates"]],
-            ports        = [(p["port"], p["proto"]) for p in net["ports"]],
-            isUserNetwork= net["isUserNetwork"],
-            hostIps      = net["hostIps"],
-        )
-        qemu = Qemu(em["imagePath"], arch, end, em["kernelPath"], em["workDir"], debug=debug)
-        return qemu, em["initArg"], em["workDir"], networkResult
+        return findings
 
     def _applyInjection(self, findings: dict) -> bool:
         """Re-apply the init injection that was restored after explore(). Idempotent."""
@@ -677,7 +517,7 @@ class Emulator:
         findings = self._loadFindings()
         if not findings:
             return
-        result = self._buildQemuFromFindings(findings)
+        result = buildQemuFromFindings(findings)
         if not result:
             return
         qemu, initArg, workDir, networkResult = result
@@ -692,7 +532,7 @@ class Emulator:
         findings = self._loadFindings()
         if not findings:
             return
-        result = self._buildQemuFromFindings(findings, debug=True)
+        result = buildQemuFromFindings(findings, debug=True)
         if not result:
             return
         qemu, initArg, workDir, networkResult = result
