@@ -27,10 +27,13 @@ COPY . .
 # Download firmware emulation binaries (kernels, busybox, etc.)
 RUN ./download.sh /femu/binaries
 
-# Install FEMU and its Python dependencies
-RUN pip3 install --no-cache-dir --break-system-packages .
+# Create a venv and install FEMU inside it
+ENV VIRTUAL_ENV=/opt/femu
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+RUN pip install --no-cache-dir .
 
 # Running as root inside the container so sudo commands work without a password
 # (root calling sudo is a no-op privilege-wise but satisfies the subprocess calls)
 
-ENTRYPOINT ["python3", "-m", "femu", "--binaries", "/femu/binaries"]
+ENTRYPOINT ["python", "-m", "femu", "--binaries", "/femu/binaries"]
