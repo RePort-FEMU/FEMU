@@ -8,5 +8,5 @@ dist/
 build/
 src/output/
 output/
-database/pgdata/
+database/
 firmwares/
