@@ -186,12 +186,6 @@ def loadFindings(workDir: str, tag: str) -> dict | None:
 
 def buildQemuFromFindings(findings: dict,
                            debug: bool = False) -> "tuple[Qemu, str, str, NetworkResult] | None":
-    if findings.get("stage") != "success":
-        logger.error(
-            f"Cannot boot — findings stage is '{findings.get('stage', 'unknown')}', "
-            f"not 'success'. Run in check mode first."
-        )
-        return None
     if "emulation" not in findings or "network" not in findings:
         logger.error("Findings are missing emulation or network data.")
         return None

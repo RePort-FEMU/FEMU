@@ -3,9 +3,9 @@ import json
 import logging
 import shutil
 import os
-import sys
 import signal
 import subprocess
+from time import sleep
 
 from .common import Architecture, Endianess, NetworkResult, ProbeResult, GIGA
 from .qemuInterface import Qemu
@@ -268,14 +268,14 @@ class Emulator:
 
     def _loadFindings(self) -> dict | None:
         findings = loadFindings(self.workDir, self.tag)
-        if findings:
-            return findings
-        logger.info("No cached findings — extracting to locate them")
-        if not self.extract():
-            return None
-        findings = loadFindings(self.workDir, self.tag)
         if not findings:
-            logger.error("No findings.json found — run in CHECK mode first")
+            logger.error("No findings found — run in check mode first")
+            return None
+        if findings.get("stage") != "success":
+            logger.error(
+                f"Cannot boot — findings stage is '{findings.get('stage', 'unknown')}', "
+                f"not 'success'. Run in check mode first."
+            )
             return None
         return findings
 
@@ -360,21 +360,18 @@ class Emulator:
         workDir = self.getWorkDir()
 
         findingsPath = os.path.join(workDir, "findings.json")
-        if os.path.exists(findingsPath):
+        if os.path.exists(findingsPath) and os.path.isfile(findingsPath):
             with open(findingsPath) as f:
                 existing = json.load(f)
             stage = existing.get("stage", "unknown")
-            answer = input(
-                f"Findings already exist for this firmware (stage: {stage}). Re-run exploration? [y/N]: "
-            ).strip().lower()
-            if answer != "y":
-                if stage == "success":
-                    logger.info("Skipping exploration — loading existing findings.")
-                    return existing
-                else:
-                    logger.info(f"Keeping existing findings (stage: {stage}) — aborting.")
-                    return None
-
+            logger.warning(f"Existing findings found at {findingsPath} with stage '{stage}'")
+            if stage == "success":
+                logger.warning("Previous run was successful — reusing findings and skipping preparation.")
+                return existing
+            else:
+                logger.info("Waiting 5 seconds before overwriting existing findings...")
+                sleep(5)
+    
         if os.path.isdir(os.path.join(workDir, "mnt")) and len(os.listdir(os.path.join(workDir, "mnt"))) > 0:
             unmountImage(os.path.join(workDir, "mnt"))
             shutil.rmtree(os.path.join(workDir, "mnt"), ignore_errors=True)
