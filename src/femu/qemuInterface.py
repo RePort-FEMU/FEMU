@@ -225,7 +225,7 @@ class Qemu:
         cmd.extend(["-serial",  f"file:{logPath}"])
         cmd.extend(["-serial",  f"unix:{os.path.join(self.tempdir, 'qemu.S1')},server,nowait"])
         cmd.extend(["-monitor", f"unix:{os.path.join(self.tempdir, 'qemu.monitor')},server,nowait"])
-        cmd.extend(["-display", "none", "-vga", "none"])
+        cmd.extend(["-display", "none"])
 
         cmd.extend(self._buildNetworkArgs(networkResult))
 

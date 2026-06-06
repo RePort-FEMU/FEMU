@@ -5,8 +5,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # QEMU emulators
-    qemu-system-arm qemu-system-mips \
+    # QEMU emulators + ROM files (vgabios, efi-e1000, etc.)
+    qemu-system-arm qemu-system-mips qemu-system-data \
     # Image preparation
     e2fsprogs util-linux fdisk\
     # Network / privilege
