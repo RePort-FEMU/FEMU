@@ -314,7 +314,7 @@ class Qemu:
         early_stopped = False
         start_time    = time.monotonic()
 
-        process    = subprocess.Popen(cmd)
+        process    = subprocess.Popen(cmd, stderr=subprocess.PIPE)
         _active_qemu_processes.add(process)
         log_thread = threading.Thread(
             target=self._tailLog,
@@ -356,4 +356,8 @@ class Qemu:
         logger.info(f"QEMU finished after {elapsed:.2f}s")
 
         if not early_stopped and process.returncode not in (0, None):
+            stderr_out = (process.stderr.read().decode(errors="replace").strip()
+                          if process.stderr else "")
+            if stderr_out:
+                logger.error(f"QEMU stderr:\n{stderr_out}")
             raise subprocess.CalledProcessError(process.returncode, cmd)
