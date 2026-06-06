@@ -12,6 +12,7 @@ from .common import Endianess, Architecture, NetworkResult, ProbeResult
 from .qemuInterface import Qemu
 from .kernelLogUtils import findBridges, findInterfaceIps, findPorts, findMacChanges, findVLANs
 from .emulationVerifier import verifyEmulation
+from .nvramInfer import inferNvramDefaults
 
 TIMEOUT = 300  # probe run timeout (5 minutes)
 
@@ -350,7 +351,7 @@ class PreEmulator:
             except subprocess.TimeoutExpired:
                 logger.info(f"Probe timed out after {TIMEOUT}s")
 
-            #TODO: check nvram defaults
+            inferNvramDefaults(self.imagePath, self.mountPoint, probeLog, self.workDir)
 
             # --- classify ---
             ports, candidates = self.getNetworkInfo(probeLog)
