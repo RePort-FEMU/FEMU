@@ -226,7 +226,8 @@ class PreEmulator:
     def getNetworkInfo(self, kernelLogPath: str) -> tuple[list, list]:
         """Parse a kernel log and return (ports, configCandidates)."""
         logger.debug(f"Reading kernel log: {kernelLogPath}")
-        with open(kernelLogPath, "r") as f:
+        # TODO: Consider using binary read
+        with open(kernelLogPath, "r", errors="replace") as f:
             kernelLog = f.readlines()
 
         ports = findPorts(kernelLog)
