@@ -218,29 +218,49 @@ def recursiveGuestChmod(path: str, mode: int, imagePath: str, addPerms = False) 
 
 def readGuestLink(path: str, imagePath: str, translateToHost: bool = True) -> str:
     """
-    If the path is a symlink, reads the target of the symlink and fixes it to the host path.
-    
-    Args:
-        path (str): The host path to check.
-        imagePath (str): The image path at the host.
-        translateToHost (bool): If True, translates the path to the host path.
-        
-    Returns:
-        str: The target of the symlink if it exists, otherwise the original path.
-    """
-    if not os.path.lexists(path):
-        return path
-    
-    if not os.path.islink(path):
-        return path
-    
-    # TODO: Possibly check If new path is a symlink and read it again (against original implementation)
-    linkTarget = os.readlink(path)
-    
-    if translateToHost:
-        if not imagePath:
-            imagePath = os.getcwd()
-        
-        linkTarget = guestToHostPath(imagePath, linkTarget)
+    Chroot-aware realpath: resolves symlinks at every component of the path,
+    not just the final one. Handles the case where a parent directory is a
+    symlink (e.g. /var → /tmp/var) so that makedirs on /var/run doesn't fail.
 
-    return linkTarget 
+    NOTE: The original implementation only resolved the final component.
+    This extends that behaviour to walk all components, which diverges from
+    the original but is necessary for firmware with symlinked parent dirs.
+
+    Args:
+        path (str): Host path or guest-absolute path to resolve.
+        imagePath (str): Host path to the mounted guest root (the chroot).
+        translateToHost (bool): If True, returns a host-absolute path;
+                                otherwise returns a guest-absolute path.
+
+    Returns:
+        str: The fully resolved path (host or guest depending on translateToHost).
+    """
+    if not imagePath:
+        imagePath = os.getcwd()
+
+    # Accept either a host path or a guest path
+    if path.startswith(imagePath.rstrip("/")):
+        guestPath = hostToGuestPath(imagePath, path)
+    else:
+        guestPath = path if path.startswith("/") else "/" + path
+
+    resolved = "/"
+    for part in guestPath.strip("/").split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            resolved = os.path.dirname(resolved) or "/"
+            continue
+
+        candidate = os.path.join(resolved, part)
+        hostCandidate = guestToHostPath(imagePath, candidate)
+
+        if os.path.islink(hostCandidate):
+            target = os.readlink(hostCandidate)
+            resolved = os.path.normpath(
+                target if os.path.isabs(target) else os.path.join(resolved, target)
+            )
+        else:
+            resolved = candidate
+
+    return guestToHostPath(imagePath, resolved) if translateToHost else resolved
