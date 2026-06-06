@@ -15,6 +15,8 @@ from .dbInterface import DBInterface
 
 logger = logging.getLogger(__name__)
 
+_PARTITION_OFFSET = 1048576  # 1 MiB — matches the sfdisk default
+
 def checkCompatibility(arch: Architecture, endianess: Endianess) -> bool:
     """
     Check if the architecture and endianess are compatible with the emulator.
@@ -427,22 +429,23 @@ def createRawImg(path: str, size: int) -> str:
     if not os.path.exists(path):
         raise RuntimeError(f"Failed to create raw image file at {path}.")
     
-    # Create partition table using sfdisk
+    # Create partition table using sfdisk — start sector is derived from _PARTITION_OFFSET
+    start_sector = _PARTITION_OFFSET // 512
     try:
         subprocess.run(
             ["sfdisk", path, "--no-reread", "--force"],
-            input="label: dos\ntype=83",
+            input=f"label: dos\nstart={start_sector}, type=83",
             text=True,
             check=True,
             capture_output=True,
         )
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Failed to create partition table for raw image {path}: {e}")
-    
-    # Add a ext2 filesystem to the raw image
+
+    # Add an ext2 filesystem at the same offset
     try:
         subprocess.run(
-            ["mke2fs", "-E", "root_owner=1000:1000,offset=1048576", path], 
+            ["mke2fs", "-E", f"root_owner=1000:1000,offset={_PARTITION_OFFSET}", path],
             text=True,
             check=True,
             capture_output=True,
@@ -477,20 +480,15 @@ def runAsRoot(command: list[str]) -> subprocess.CompletedProcess:
     return result
 
 def addPartition(rawImagePath: str) -> str:
-    runAsRoot(["losetup", "-Pf", rawImagePath]) 
-    
-    # Find the loop device associated with the raw image
+    # Attach the loop device directly at the filesystem offset so no partition
+    # device node (loopNp1) is needed — works in containers without udevd.
+    runAsRoot(["losetup", "-f", f"--offset={_PARTITION_OFFSET}", rawImagePath])
+
     loopDevices = runAsRoot(["losetup", "-j", rawImagePath]).stdout.strip()
-    
     if not loopDevices.strip():
-        raise RuntimeError(f"No loop device found for raw image {rawImagePath}. Please check the raw image path and try again.")
+        raise RuntimeError(f"No loop device found for raw image {rawImagePath}.")
 
-    loopDevice = loopDevices.split("\n")[0].split(":")[0].strip() + "p1"  # Assuming the first partition is to be mounted
-
-    if not os.path.exists(loopDevice):
-        raise RuntimeError(f"Loop device {loopDevice} does not exist. Please check the raw image path and try again.")
-
-    return loopDevice
+    return loopDevices.split("\n")[0].split(":")[0].strip()
 
 def mountImage(rawImagePath: str, mountPoint: str) -> None:
     """
@@ -534,9 +532,6 @@ def removePartition(loopDevice: str) -> None:
     """
     if not os.path.exists(loopDevice):
         raise FileNotFoundError(f"Loop device {loopDevice} does not exist.")
-
-    if re.match(r'^/dev/loop\d+p\d+$', loopDevice):
-        loopDevice = loopDevice.rsplit("p", 1)[0]  # Remove partition suffix if present
 
     runAsRoot(["losetup", "-d", loopDevice])
     

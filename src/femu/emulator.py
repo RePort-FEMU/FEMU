@@ -98,14 +98,14 @@ class Emulator:
     def extract(self) -> bool:
         logger.info(f"Extracting firmware image: {self.config.firmwarePath}")
 
-        result = extract(self.config.firmwarePath, self.imagePath, kernel=False, quiet=True)[0]
+        result = extract(self.config.firmwarePath, self.imagePath, kernel=False)[0]
         if not result["status"]:
             logger.error(f"Failed to extract filesystem from {self.config.firmwarePath}")
             return False
         self.filesystemPath = str(result["rootfsPath"])
         logger.debug(f"Root filesystem extracted to: {self.filesystemPath}")
 
-        result = extract(self.config.firmwarePath, self.imagePath, filesystem=False, quiet=True)[0]
+        result = extract(self.config.firmwarePath, self.imagePath, filesystem=False)[0]
         if not result["status"]:
             logger.error(f"Failed to extract kernel from {self.config.firmwarePath}")
             shutil.rmtree(self.filesystemPath, ignore_errors=True)
@@ -217,10 +217,10 @@ class Emulator:
         logger.info("Dumping filesystem objects to database.")
         fileInfo = getFilesInfo(self.filesystemPath)
         objectIds, _ = getObjectIds(fileInfo, self.config.sqlIP, self.config.sqlPort)
-        insertObjectsToImage(self.db_id, objectIds, fileInfo, self.config.sqlIP, self.config.sqlPort)
+        insertObjectsToImage(str(self.db_id), objectIds, fileInfo, self.config.sqlIP, self.config.sqlPort)
 
         linkInfo = getLinksInfo(self.filesystemPath)
-        insertLinksToImage(self.db_id, linkInfo, self.config.sqlIP, self.config.sqlPort)
+        insertLinksToImage(str(self.db_id), linkInfo, self.config.sqlIP, self.config.sqlPort)
         return True
         
     def getWorkDir(self) -> str:

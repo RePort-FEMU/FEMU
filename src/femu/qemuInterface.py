@@ -12,6 +12,17 @@ from .common import Architecture, Endianess, NetworkResult
 
 logger = logging.getLogger(__name__)
 
+_active_qemu_processes: set[subprocess.Popen] = set()
+
+def kill_all_qemu() -> None:
+    """Terminate every tracked QEMU process. Safe to call from a signal handler."""
+    for proc in list(_active_qemu_processes):
+        if proc.poll() is None:
+            logger.warning(f"Killing rogue QEMU process (pid {proc.pid})")
+            proc.kill()
+            proc.wait()
+    _active_qemu_processes.clear()
+
 
 def _isKernelPanic(line: str | None) -> bool:
     if line and ("Kernel panic" in line or "kernel panic" in line):
@@ -304,6 +315,7 @@ class Qemu:
         start_time    = time.monotonic()
 
         process    = subprocess.Popen(cmd)
+        _active_qemu_processes.add(process)
         log_thread = threading.Thread(
             target=self._tailLog,
             args=(logPath, stop_event, _composed),
@@ -336,6 +348,7 @@ class Qemu:
                 process.kill()
                 process.wait()
             log_thread.join(timeout=5)
+            _active_qemu_processes.discard(process)
             if tap_active:
                 self._teardownTap()
 

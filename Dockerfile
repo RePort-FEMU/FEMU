@@ -1,41 +1,41 @@
-FROM ubuntu:22.04
+FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Python runtime + build tools (build-essential needed for femu-extractor Rust/maturin compile)
-    python3 python3-pip python3.10-venv git wget  \
-    # Build tools for femu-extractor and other Python dependencies with native extensions
-    build-essential pkg-config libfontconfig-dev \
-    # QEMU emulators (arm, mipseb, mipsel)
+    # QEMU emulators
     qemu-system-arm qemu-system-mips \
-    # Image preparation: loop devices, ext2 filesystem creation
-    e2fsprogs util-linux \
-    # Privilege helpers used by TAP setup and mknod fallback
-    iproute2 sudo \
-    # Reachability checks
-    iputils-ping \
-    # Init-type detection in preEmulator
+    # Image preparation
+    e2fsprogs util-linux fdisk\
+    # Network / privilege
+    iproute2 sudo iputils-ping \
+    # File type detection
     file \
+    # Archive & filesystem extraction (binwalk runtime deps)
+    unzip 7zip squashfs-tools \
+    zstd lz4 lzop cpio cabextract \
+    liblzma5 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /femu
-
-# Copy repo — .dockerignore keeps this lean
 COPY . .
 
-# Download firmware emulation binaries (kernels, busybox, etc.)
-RUN ./download.sh /femu/binaries
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential pkg-config libfontconfig-dev git wget \
+    && wget -q https://github.com/onekey-sec/sasquatch/releases/download/sasquatch-v4.5.1-6/sasquatch_1.0_amd64.deb \
+    && dpkg -i sasquatch_1.0_amd64.deb && rm sasquatch_1.0_amd64.deb \
+    && ./download.sh /femu/binaries \
+    && pip install --no-cache-dir . jefferson ubi-reader \
+    && apt-get purge -y build-essential pkg-config libfontconfig-dev git wget \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* /root/.cache
 
-# Create a venv and install FEMU inside it
-ENV VIRTUAL_ENV=/opt/femu
-RUN python3 -m venv $VIRTUAL_ENV
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-RUN pip install --no-cache-dir .
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Running as root inside the container so sudo commands work without a password
-# (root calling sudo is a no-op privilege-wise but satisfies the subprocess calls)
+VOLUME ["/input", "/output"]
 
-ENTRYPOINT ["python", "-m", "femu", "--binaries", "/femu/binaries"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh", "-o", "/output"]

@@ -124,10 +124,10 @@ femu -m check -i firmware.bin -sql 127.0.0.1 -p 4321
 docker run --rm \
     --privileged \
     --device /dev/net/tun \
-    -v "$(pwd):/workspace" \
-    -w /workspace \
+    -v "/path/to/firmware.bin:/input/firmware.bin:ro" \
+    -v "$(pwd)/output:/output" \
     ghcr.io/rePort-FEMU/FEMU:main \
-    -m check -i ./firmwares/router.bin -o ./output
+    -m check -i /input/firmware.bin
 ```
 
 `--privileged` is required for TAP interface setup and image mounting inside the container.

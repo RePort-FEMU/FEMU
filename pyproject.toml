@@ -9,7 +9,7 @@ description = "Firmware Emulation Framework"
 requires-python = ">=3.10"
 
 dependencies = [
-    "femu-extractor @ git+https://github.com/RePort-FEMU/extractor@e523434a5edec60bee558c6ce042211f403d2baa",
+    "femu-extractor @ git+https://github.com/RePort-FEMU/extractor@master",
     "psycopg2-binary>=2.9",
 ]
 

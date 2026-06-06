@@ -1,10 +1,13 @@
 import logging
 import os
+import signal
+import sys
 import argparse
 
 from .dbInterface import checkConnection
 from .emulator import Emulator
 from .emulatorConfig import emulatorConfig, _DEFAULT_BINARIES, _DEFAULT_SCRIPTS
+from .qemuInterface import kill_all_qemu
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,15 @@ def checkArguments(args: argparse.Namespace):
             logger.error(f"Failed to create output directory '{args.output}': {e}")
             exit(1)
 
+def _handle_shutdown(signum, frame):
+    logger.info(f"Received signal {signum} — shutting down.")
+    kill_all_qemu()
+    sys.exit(1)
+
 def main():
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
+
     args = parseArguments()
     checkArguments(args)
     
