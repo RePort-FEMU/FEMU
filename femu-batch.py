@@ -16,6 +16,23 @@ import uuid
 from pathlib import Path
 
 
+_STAGE_ABBREV: dict[str, str] = {
+    "success":           "s",
+    "partial_success":   "ps",
+    "extraction_failed": "ef",
+    "probe_failed":      "pf",
+    "timeout":           "to",
+    "unknown":           "u",
+}
+
+def _abbrev(stage: str) -> str:
+    if stage in _STAGE_ABBREV:
+        return _STAGE_ABBREV[stage]
+    if stage.startswith("error:") or stage.startswith("exception:"):
+        return "err"
+    return stage[:4]
+
+
 def run_single(firmware: Path, output_dir: Path, subdir: Path, image: str, mode: str, extra: list[str]) -> dict:
     fw_output = output_dir / subdir / firmware.stem
     fw_output.mkdir(parents=True, exist_ok=True)
@@ -107,6 +124,8 @@ def main():
     print(f"Running {len(firmware_files)} firmware(s) with {args.jobs} parallel containers...\n")
 
     results = []
+    stage_counts: dict[str, int] = {}
+    total_fw = len(firmware_files)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futures = {
             pool.submit(run_single, fw, output_dir, subdir, args.image, args.mode, extra): (fw, subdir)
@@ -122,7 +141,10 @@ def main():
             rc = result.get("returncode", "?")
             stage = result.get("stage", "unknown")
             log = result.get("log_path", "")
-            print(f"  [{stage:30s}]  {result['firmware']:50s}  (rc={rc})  → {log}")
+            ab = _abbrev(stage)
+            stage_counts[ab] = stage_counts.get(ab, 0) + 1
+            counters = "  ".join(f"{s}:{n}" for s, n in sorted(stage_counts.items()))
+            print(f"  [{ab:4s}]  {result['firmware']:60s}  (rc={rc})  [{len(results)}/{total_fw} | {counters}]  → {log}")
 
     total   = len(results)
     success = sum(1 for r in results if r.get("stage") == "success")
