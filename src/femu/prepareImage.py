@@ -470,7 +470,7 @@ def fixFileSystem(rootPath: str) -> None:
 
     # Create links for busybox sh
     if not existsInGuest(rootPath, "/bin/sh"):
-        #FirmAE diff
+        # FirmAE diff
         # if broken symlink, remove it before creating a new one
         if os.path.lexists(guestToHostPath(rootPath, "/bin/sh")) and os.path.islink(guestToHostPath(rootPath, "/bin/sh")):
             os.remove(guestToHostPath(rootPath, "/bin/sh"))

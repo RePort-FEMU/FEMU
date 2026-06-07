@@ -224,6 +224,7 @@ class PreEmulator:
                 injectFile(self.backupFile, f"exec {init} &\n")
                 return "init=/firmadyne/preInit.sh"
 
+        # FIRMAE diff
         return "init=/firmadyne/preInit.sh"
 
     def getKernelPath(self) -> str:
