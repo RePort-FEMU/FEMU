@@ -224,7 +224,7 @@ class PreEmulator:
                 injectFile(self.backupFile, f"exec {init} &\n")
                 return "init=/firmadyne/preInit.sh"
 
-        return "rdinit=/firmadyne/preInit.sh"
+        return "init=/firmadyne/preInit.sh"
 
     def getKernelPath(self) -> str:
         """Return the emulation kernel path for the current architecture."""
