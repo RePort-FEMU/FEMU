@@ -81,6 +81,16 @@ def classifyNetwork(candidates: list, ports: list) -> NetworkResult:
             ports, False, ["192.168.0.2"],
         )
 
+    # When both eth* (WAN/physical) and bridge interfaces are present, the eth*
+    # ones are the WAN side even if they carry a static IP — keep only bridges.
+    # wnr2000v4-V1.0.0.70.zip - mipseb
+    # [('192.168.1.1', 'br0', None, None, 'br0'), ('10.0.2.15', 'eth0', None, None, 'br1')]
+    # R6900
+    # [('192.168.1.1', 'br0', None, None, 'br0'), ('20.45.150.190', 'eth0', None, None, 'eth0')]
+    devs = {c[1] for c in candidates}
+    if any(d.startswith("eth") for d in devs) and any(not d.startswith("eth") for d in devs):
+        candidates = [c for c in candidates if not c[1].startswith("eth")]
+
     static = [c for c in candidates if not isDhcpLike(c[0])]
     dhcp   = [c for c in candidates if     isDhcpLike(c[0])]
 
