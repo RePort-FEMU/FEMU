@@ -105,8 +105,16 @@ def validateInits(rootPath: str, suspectedInits: list[str]) -> list[str]:
         # If file does not exist, or symlink is broken, try to locate it 
         filename = os.path.basename(init)
         
-        # TODO: Dereference possible symlinks
-        possibleLocations = [guestToHostPath(rootPath, loc) for loc in ["/bin", "/sbin", "/usr/bin", "/usr/sbin"]]
+        # FIRMAE diff: resolve symlinks (e.g. /bin → /usr/bin) and deduplicate
+        # before searching, to avoid searching the same directory twice and to
+        # handle firmware where standard dirs are symlinks to merged paths.
+        seen_locs: set[str] = set()
+        possibleLocations = []
+        for loc in ["/bin", "/sbin", "/usr/bin", "/usr/sbin"]:
+            resolved = readGuestLink(guestToHostPath(rootPath, loc), rootPath)
+            if resolved not in seen_locs:
+                seen_locs.add(resolved)
+                possibleLocations.append(resolved)
         results = find(possibleLocations, filename)
 
         if len(results) > 0:
@@ -270,7 +278,10 @@ def createReferencedDirectories(rootPath: str) -> None:
                         if "%s" in dirPath or "%d" in dirPath or "%c" in dirPath or "/tmp/services" in dirPath:
                             continue
                         fullPath = guestToHostPath(rootPath, dirPath)
-                        os.makedirs(readGuestLink(fullPath, rootPath), exist_ok=True)
+                        resolvedPath = readGuestLink(fullPath, rootPath)
+                        if os.path.exists(resolvedPath) and not os.path.isdir(resolvedPath):
+                            continue  # path exists as a file/device — don't clobber it
+                        os.makedirs(resolvedPath, exist_ok=True)
                         if dirPath not in createdDirs:
                             createdDirs.add(dirPath)
                             logger.debug(f"Created directory: {fullPath} for binary: {hostToGuestPath(rootPath, filePath)}")

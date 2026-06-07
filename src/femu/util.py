@@ -632,7 +632,8 @@ def find(searchPath: str | list[str], fileNames: str | list[str]) -> list[str]:
 
     for rootPath in searchPath:
         if not os.path.exists(rootPath):
-            raise FileNotFoundError(f"Root path {rootPath} does not exist.")
+            logger.warning(f"find: skipping non-existent path {rootPath}")
+            continue
 
         for dirpath, _, files in os.walk(rootPath):
             for name in fileNames:
@@ -666,7 +667,8 @@ def findDirs(searchPath: str | list[str], dirNames: str | list[str]) -> list[str
 
     for rootPath in searchPath:
         if not os.path.exists(rootPath):
-            raise FileNotFoundError(f"Root path {rootPath} does not exist.")
+            logger.warning(f"findDirs: skipping non-existent path {rootPath}")
+            continue
 
         for dirpath, dirnames, _ in os.walk(rootPath):
             for name in dirNames:
