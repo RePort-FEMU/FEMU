@@ -144,7 +144,7 @@ def main():
             ab = _abbrev(stage)
             stage_counts[ab] = stage_counts.get(ab, 0) + 1
             counters = "  ".join(f"{s}:{n}" for s, n in sorted(stage_counts.items()))
-            print(f"  [{stage:20s}]  {result['firmware']:60s}  (rc={rc})  [{len(results)}/{total_fw} | {counters}]  → {log}")
+            print(f"  [{stage:20s}]  {result['firmware']:70s}  (rc={rc})  [{len(results)}/{total_fw} | {counters}]  → {log}")
 
     total   = len(results)
     success = sum(1 for r in results if r.get("stage") == "success")
