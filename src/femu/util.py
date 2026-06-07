@@ -479,10 +479,31 @@ def runAsRoot(command: list[str]) -> subprocess.CompletedProcess:
     
     return result
 
+def _recoverLoopDevice(errMsg: str) -> bool:
+    """
+    If losetup reports a lost device node, recreate it with mknod and return True.
+    The caller should retry the losetup command once after this returns True.
+    """
+    m = re.search(r"device node (/dev/loop(\d+)).*is lost", errMsg)
+    if not m:
+        return False
+    devPath, minor = m.group(1), m.group(2)
+    if not os.path.exists(devPath):
+        runAsRoot(["mknod", devPath, "b", "7", minor])
+        logger.info(f"Re-created lost loop device node {devPath}")
+    return True
+
 def addPartition(rawImagePath: str) -> str:
     # Attach the loop device directly at the filesystem offset so no partition
     # device node (loopNp1) is needed — works in containers without udevd.
-    runAsRoot(["losetup", "-f", f"--offset={_PARTITION_OFFSET}", rawImagePath])
+    for attempt in range(2):
+        try:
+            runAsRoot(["losetup", "-f", f"--offset={_PARTITION_OFFSET}", rawImagePath])
+            break
+        except RuntimeError as e:
+            if attempt == 0 and _recoverLoopDevice(str(e)):
+                continue
+            raise
 
     loopDevices = runAsRoot(["losetup", "-j", rawImagePath]).stdout.strip()
     if not loopDevices.strip():
