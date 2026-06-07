@@ -17,7 +17,7 @@ _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
 
-VERIFY_TIMEOUT = 120   # seconds before giving up on a verify run
+VERIFY_TIMEOUT = 360   # seconds before giving up on a verify run
 BOOT_WAIT      = 10    # minimum seconds before the first connectivity check (mirrors check_emulation.sh sleep 10)
 CHECK_INTERVAL = 5     # seconds between consecutive checks
 
