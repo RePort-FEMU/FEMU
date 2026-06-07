@@ -161,7 +161,7 @@ class Qemu:
                         seen.add(dbgPort)
             for i in range(numIfaces):
                 args += ["-device", f"{device},netdev=net{i}"]
-                args += ["-netdev",  f"user,id=net{i}{portfwd}"]
+                args += ["-netdev",  f"user,id=net{i}{portfwd if i == 0 else ''}"]
             return args
 
         # --- TAP networking ---
