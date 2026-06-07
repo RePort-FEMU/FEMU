@@ -72,6 +72,10 @@ class Emulator:
         self.inferredKernelInit = []
         self.inferredKernelInitStrings = []
           
+# ------------------------------------------------------------------
+# Utilities 
+# ------------------------------------------------------------------
+          
     def createDirectories(self):
         # Create necessary directories for images and scratch space
         if not os.path.exists(self.imagePath):
@@ -90,144 +94,11 @@ class Emulator:
                 logger.error(f"Failed to create work directory: {e}")
                 raise
             
-    def _updateDbField(self, field: str, value: str) -> bool:
-        if not self.config.sqlIP or not self.db_id:
-            return True
-        return updateImageField(self.db_id, field, value, self.config.sqlIP, self.config.sqlPort)
-
-    def extract(self) -> bool:
-        logger.info(f"Extracting firmware image: {self.config.firmwarePath}")
-
-        result = extract(self.config.firmwarePath, self.imagePath, kernel=False)[0]
-        if not result["status"]:
-            logger.error(f"Failed to extract filesystem from {self.config.firmwarePath}")
-            return False
-        self.filesystemPath = str(result["rootfsPath"])
-        logger.debug(f"Root filesystem extracted to: {self.filesystemPath}")
-
-        result = extract(self.config.firmwarePath, self.imagePath, filesystem=False)[0]
-        if not result["status"]:
-            logger.error(f"Failed to extract kernel from {self.config.firmwarePath}")
-            shutil.rmtree(self.filesystemPath, ignore_errors=True)
-            self.filesystemPath = None
-            return False
-        self.kernelPath = str(result["kernelPath"])
-        logger.debug(f"Kernel extracted to: {self.kernelPath}")
-
-        if not self.kernelPath or not self.filesystemPath:
-            logger.error("Extraction failed: paths are empty.")
-            return False
-
-        # Register in DB now that we have a successful extraction
-        if self.config.sqlIP:
-            brandId = upsertBrand(self.brand, self.config.sqlIP, self.config.sqlPort)
-            if brandId:
-                self.db_id = upsertImage(
-                    self.tag,
-                    os.path.basename(self.config.firmwarePath),
-                    self.tag,
-                    brandId,
-                    self.config.sqlIP,
-                    self.config.sqlPort,
-                )
-                if self.db_id:
-                    updateImageField(self.db_id, "rootfs_extracted", "true",
-                                     self.config.sqlIP, self.config.sqlPort)
-                    updateImageField(self.db_id, "kernel_extracted", "true",
-                                     self.config.sqlIP, self.config.sqlPort)
-
-        logger.info(f"Extraction complete — kernel: {self.kernelPath}, rootfs: {self.filesystemPath}")
-        return True
-    
-    def inferArchitecture(self):
-        if not self.filesystemPath:
-            logger.error("Filesystem path is not set. Cannot infer architecture.")
-            return False
-
-        self.architecture, self.endianess = checkArch(self.filesystemPath, self.tag)
-
-        if self.architecture == Architecture.UNKNOWN or self.endianess == Endianess.UNKNOWN:
-            logger.error("Failed to determine architecture or endianness.")
-            return False
-
-        self._updateDbField("arch", str(self.architecture) + str(self.endianess))
-        logger.info(f"Architecture: {self.architecture}, Endianness: {self.endianess}")
-        return True
-    
-    def inferKernelVersion(self):
-        # Infer the kernel version from the kernel image
-        logger.info(f"Inferring kernel version for firmware: {self.config.firmwarePath}")
-        
-        if not self.kernelPath:
-            logger.error("Kernel path is not set. Cannot infer kernel version.")
-            return False
-        
-        for string in strings(self.kernelPath, minLength=4):
-            if "Linux version" in string:
-                temp = string.split("Linux version ")[1].split(" ")[0]
-                if temp:
-                    if self.kernelVersion and self.kernelVersion != temp:
-                        logger.warning(f"Multiple kernel version strings found: {self.kernelVersion} and {temp}. Using the first one.")
-                        continue
-                    
-                    self.kernelVersion = temp
-                    self.kernelVersionString = string
-                    logger.debug(f"Found kernel version: {self.kernelVersion}")
-            elif "init=" in string:
-                temp = string.split("init=")[1].split(" ")[0]
-                if temp:
-                    self.inferredKernelInit.append(temp)
-                    self.inferredKernelInitStrings.append(string)
-                    logger.debug(f"Found kernel init command: {temp}")
-
-        if not self.kernelVersion:
-            logger.warning("Kernel version could not be inferred from the kernel image.")
-            return False
-        else:
-            self._updateDbField("kernel_version", self.kernelVersion)
-
-        return True
-
-    def collectInfo(self):
-        logger.info(f"Collecting information for firmware: {self.config.firmwarePath}")
-
-        if not self.kernelPath or not self.filesystemPath:
-            logger.error("Extraction must be run before collecting information.")
-            return False
-
-        # Check architecture and endianess
-        if not self.inferArchitecture():
-            logger.error("Failed to infer architecture.")
-            return False
-        
-        if not self.inferKernelVersion():
-            logger.warning("Failed to infer kernel version.")
-
-        return True
-    
-    def dumpObjectsToDB(self):
-        if not self.config.sqlIP:
-            logger.warning("No database IP provided, skipping filesystem dump.")
-            return True
-
-        if not self.db_id or not self.filesystemPath:
-            logger.error("DB id or filesystem path not set — run extract() first.")
-            return False
-
-        logger.info("Dumping filesystem objects to database.")
-        fileInfo = getFilesInfo(self.filesystemPath)
-        objectIds, _ = getObjectIds(fileInfo, self.config.sqlIP, self.config.sqlPort)
-        insertObjectsToImage(str(self.db_id), objectIds, fileInfo, self.config.sqlIP, self.config.sqlPort)
-
-        linkInfo = getLinksInfo(self.filesystemPath)
-        insertLinksToImage(str(self.db_id), linkInfo, self.config.sqlIP, self.config.sqlPort)
-        return True
-        
     def getWorkDir(self) -> str:
         path = os.path.join(self.workDir, self.tag)
         os.makedirs(path, exist_ok=True)
         return path
-
+    
     def extractFs(self, dst: str):
         if not self.filesystemPath:
             logger.error("Filesystem path is not set. Cannot extract filesystem.")
@@ -248,6 +119,110 @@ class Emulator:
         except Exception as e:
             logger.error(f"Failed to extract filesystem: {e}")
             return False
+    
+    def _logAccessInfo(self, findings: dict) -> None:
+        """Print the URLs and shell access info so the user knows where to point a browser."""
+        net = findings["network"]
+        webPorts = {p["port"] for p in net["ports"] if p["proto"] == "tcp" and p["port"] in (80, 443, 8080, 8443)}
+
+        if net["isUserNetwork"]:
+            baseIps = ["127.0.0.1"]
+        else:
+            baseIps = [c["ip"] for c in net["candidates"]]
+
+        if webPorts:
+            for ip in baseIps:
+                for port in sorted(webPorts):
+                    scheme = "https" if port in (443, 8443) else "http"
+                    suffix = f":{port}" if port not in (80, 443) else ""
+                    logger.info(f"  Web UI → {scheme}://{ip}{suffix}/")
+        else:
+            for ip in baseIps:
+                logger.info(f"  Web UI → http://{ip}/  (no web port detected — try manually)")
+                
+    def _runQemu(self, qemu: Qemu, initArg: str, logPath: str,
+                 networkResult: NetworkResult, timeout: int) -> None:
+        """Run QEMU with network-up notification, clean Ctrl+C and SIGTERM handling."""
+        def _sigterm(*_):
+            raise KeyboardInterrupt
+
+        old_handler = signal.signal(signal.SIGTERM, _sigterm)
+        try:
+            qemu.run(initArg, logPath, networkResult=networkResult, timeout=timeout,
+                     on_line=makeNetworkMonitor(networkResult))
+        except subprocess.TimeoutExpired:
+            logger.info("Session timed out")
+        except KeyboardInterrupt:
+            logger.info("Interrupted — QEMU shutting down")
+        finally:
+            signal.signal(signal.SIGTERM, old_handler)
+            
+    def _cleanupWorkDir(self) -> None:
+        """Remove the raw image and unmount any mounts in the workDir."""
+        workDir = self.getWorkDir()
+        mntPath = os.path.join(workDir, "mnt")
+        if os.path.isdir(mntPath) and len(os.listdir(mntPath)) > 0:
+            unmountImage(mntPath)
+            shutil.rmtree(mntPath, ignore_errors=True)
+            logger.warning("Unmounted and removed existing mount directory.")
+        rawImgPath = os.path.join(workDir, "raw.img")
+        if os.path.exists(rawImgPath):
+            logger.info("Removing existing raw image.")
+            os.remove(rawImgPath)
+            logger.info("Removed existing raw image successfully.")        
+    
+# ------------------------------------------------------------------
+# DB Helpers
+# ------------------------------------------------------------------
+
+    def dumpObjectsToDB(self):
+        if not self.config.sqlIP:
+            return False
+
+        if not self.db_id or not self.filesystemPath:
+            logger.error("DB id or filesystem path not set — run extract() first.")
+            return False
+
+        logger.info("Dumping filesystem objects to database.")
+        fileInfo = getFilesInfo(self.filesystemPath)
+        objectIds, _ = getObjectIds(fileInfo, self.config.sqlIP, self.config.sqlPort)
+        insertObjectsToImage(str(self.db_id), objectIds, fileInfo, self.config.sqlIP, self.config.sqlPort)
+
+        linkInfo = getLinksInfo(self.filesystemPath)
+        insertLinksToImage(str(self.db_id), linkInfo, self.config.sqlIP, self.config.sqlPort)
+        return True
+            
+    def _updateDbField(self, field: str, value: str) -> bool:
+        if not self.config.sqlIP or not self.db_id:
+            return True
+        return updateImageField(self.db_id, field, value, self.config.sqlIP, self.config.sqlPort)
+    
+    def registerBrandInDB(self) -> int | None:
+        if not self.config.sqlIP:
+            return None
+        return upsertBrand(self.brand, self.config.sqlIP, self.config.sqlPort)
+    
+    def registerImageInDB(self) -> bool:
+        if not self.config.sqlIP:
+            return False
+        if not self.db_id:
+            brandId = self.registerBrandInDB()
+            if brandId is None:
+                logger.error("Failed to register brand in database.")
+                return False
+            self.db_id = upsertImage(
+                self.tag,
+                os.path.basename(self.config.firmwarePath),
+                self.tag,
+                brandId,
+                self.config.sqlIP,
+                self.config.sqlPort,
+            )
+        return True if self.db_id else False
+    
+# ------------------------------------------------------------------
+# Findings helpers
+# ------------------------------------------------------------------
 
     def _exportFindings(self, stage: str, workDir: str | None = None,
                         probeResult: ProbeResult | None = None,
@@ -262,9 +237,6 @@ class Emulator:
         saveFindingsToDB(findings, self.config.sqlIP, self.config.sqlPort, self.db_id)
         return findings
 
-    # ------------------------------------------------------------------
-    # Findings helpers
-    # ------------------------------------------------------------------
 
     def _loadFindings(self) -> dict | None:
         findings = loadFindings(self.workDir, self.tag)
@@ -306,26 +278,106 @@ class Emulator:
                 f.write(content)
             logger.info(f"Re-applied injection to {guestFile}")
         return True
+    
+# ------------------------------------------------------------------
+# Extraction and Info Collection
+# ------------------------------------------------------------------
 
-    def _logAccessInfo(self, findings: dict) -> None:
-        """Print the URLs and shell access info so the user knows where to point a browser."""
-        net = findings["network"]
-        webPorts = {p["port"] for p in net["ports"] if p["proto"] == "tcp" and p["port"] in (80, 443, 8080, 8443)}
+    def extract(self) -> bool:
+        logger.info(f"Extracting firmware image: {self.config.firmwarePath}")
 
-        if net["isUserNetwork"]:
-            baseIps = ["127.0.0.1"]
+        result = extract(self.config.firmwarePath, self.imagePath, kernel=False)[0]
+        if not result["status"]:
+            logger.error(f"Failed to extract filesystem from {self.config.firmwarePath}")
+            if self.config.sqlIP and self.db_id:
+                updateImageField(self.db_id, "rootfs_extracted", "false", self.config.sqlIP, self.config.sqlPort)
+            return False
         else:
-            baseIps = [c["ip"] for c in net["candidates"]]
+            if self.config.sqlIP and self.db_id:
+                updateImageField(self.db_id, "rootfs_extracted", "true", self.config.sqlIP, self.config.sqlPort)
+                
+        self.filesystemPath = str(result["rootfsPath"])
+        logger.info(f"Root filesystem extracted to: {self.filesystemPath}")
 
-        if webPorts:
-            for ip in baseIps:
-                for port in sorted(webPorts):
-                    scheme = "https" if port in (443, 8443) else "http"
-                    suffix = f":{port}" if port not in (80, 443) else ""
-                    logger.info(f"  Web UI → {scheme}://{ip}{suffix}/")
+        result = extract(self.config.firmwarePath, self.imagePath, filesystem=False)[0]
+        if not result["status"]:
+            logger.warning(f"Failed to extract kernel from {self.config.firmwarePath}")
+            if self.config.sqlIP and self.db_id:
+                updateImageField(self.db_id, "kernel_extracted", "false", self.config.sqlIP, self.config.sqlPort)
+        else:            
+            self.kernelPath = str(result["kernelPath"])
+            if self.config.sqlIP and self.db_id:
+                updateImageField(self.db_id, "kernel_extracted", "true", self.config.sqlIP, self.config.sqlPort)
+            logger.info(f"Kernel extracted to: {self.kernelPath}")
+
+        return True
+    
+    def inferArchitecture(self):
+        if not self.filesystemPath:
+            logger.error("Filesystem path is not set. Cannot infer architecture.")
+            return False
+
+        self.architecture, self.endianess = checkArch(self.filesystemPath, self.tag)
+
+        if self.architecture == Architecture.UNKNOWN or self.endianess == Endianess.UNKNOWN:
+            logger.error("Failed to determine architecture or endianness.")
+            return False
+
+        self._updateDbField("arch", str(self.architecture) + str(self.endianess))
+        logger.info(f"Architecture: {self.architecture}, Endianness: {self.endianess}")
+        return True
+    
+    def inferKernelInfo(self):
+        # Infer the kernel info from the kernel image
+        logger.info(f"Inferring kernel info for firmware: {self.config.firmwarePath}")
+        
+        if not self.kernelPath:
+            logger.error("Kernel path is not set. Cannot infer kernel version.")
+            return False
+        
+        for string in strings(self.kernelPath, minLength=4):
+            if "Linux version" in string:
+                temp = string.split("Linux version ")[1].split(" ")[0]
+                if temp:
+                    if self.kernelVersion and self.kernelVersion != temp:
+                        logger.warning(f"Multiple kernel version strings found: {self.kernelVersion} and {temp}. Using the first one.")
+                        continue
+                    
+                    self.kernelVersion = temp
+                    self.kernelVersionString = string
+                    logger.debug(f"Found kernel version: {self.kernelVersion}")
+            elif "init=" in string:
+                temp = string.split("init=")[1].split(" ")[0]
+                if temp:
+                    self.inferredKernelInit.append(temp)
+                    self.inferredKernelInitStrings.append(string)
+                    logger.debug(f"Found kernel init command: {temp}")
+
+        if not self.kernelVersion:
+            logger.warning("Kernel version could not be inferred from the kernel image.")
+            return False
         else:
-            for ip in baseIps:
-                logger.info(f"  Web UI → http://{ip}/  (no web port detected — try manually)")
+            self._updateDbField("kernel_version", self.kernelVersion)
+
+        return True
+
+    def collectInfo(self):
+        logger.info(f"Collecting information for firmware: {self.config.firmwarePath}")
+
+        if not self.filesystemPath:
+            logger.error("Extraction must be run before collecting information.")
+            return False
+
+        # Check architecture and endianess
+        if not self.inferArchitecture():
+            logger.error("Failed to infer architecture.")
+            return False
+        
+        if self.kernelPath:
+            if not self.inferKernelInfo():
+                logger.warning("Failed to infer kernel info.")
+
+        return True
 
     # ------------------------------------------------------------------
     # Modes
@@ -333,6 +385,14 @@ class Emulator:
 
     def explore(self) -> dict | None:
         logger.info(f"Running emulator for firmware: {self.config.firmwarePath}")
+        
+        # Register image to DB
+        if self.config.sqlIP:
+            if not self.registerImageInDB():
+                logger.error("Failed to register image in database. Skipping database updates for this firmware.")
+                self.config.sqlIP = None  # Avoid further DB attempts for this firmware
+        else:
+            logger.info("No database configured, skipping image registration. No further DB updates will be possible for this firmware.")
 
         logger.info(f"Step 1: Extracting firmware image {self.config.firmwarePath}")
         if not self.extract():
@@ -350,10 +410,11 @@ class Emulator:
             self._exportFindings("incompatible_arch")
             return
 
-        if not self.dumpObjectsToDB():
-            logger.error("Failed to dump objects to database.")
-            self._exportFindings("db_dump_failed")
-            return
+        if self.config.sqlIP :
+            if not self.dumpObjectsToDB():
+                logger.error("Failed to dump objects to database.")
+                self._exportFindings("db_dump_failed")
+                return None
 
         logger.info("Step 2: preparing image for emulation")
 
@@ -372,15 +433,7 @@ class Emulator:
                 logger.info("Waiting 5 seconds before overwriting existing findings...")
                 sleep(5)
     
-        if os.path.isdir(os.path.join(workDir, "mnt")) and len(os.listdir(os.path.join(workDir, "mnt"))) > 0:
-            unmountImage(os.path.join(workDir, "mnt"))
-            shutil.rmtree(os.path.join(workDir, "mnt"), ignore_errors=True)
-            logger.warning("Unmounted and removed existing mount directory.")
-
-        if os.path.exists(os.path.join(workDir, "raw.img")):
-            logger.info("Removing existing raw image.")
-            os.remove(os.path.join(workDir, "raw.img"))
-            logger.info("Removed existing raw image successfully.")
+        self._cleanupWorkDir()
 
         createRawImg(os.path.join(workDir, "raw.img"), 1 * GIGA)
         os.makedirs(os.path.join(workDir, "mnt"), exist_ok=True)
@@ -413,6 +466,7 @@ class Emulator:
             len(foundServices) > 0,
             self.architecture,
             self.endianess,
+            self.kernelVersion,
             self.config.binariesPath,
             os.path.join(workDir, "mnt"),
             workDir,
@@ -436,27 +490,12 @@ class Emulator:
 
         logger.info(f"Step 4: exporting findings")
 
-        return self._exportFindings("success", workDir=workDir,
+        status = "success" if probeResult.serviceReachable else "partial_success"
+
+        return self._exportFindings(status, workDir=workDir,
                                     probeResult=probeResult,
                                     kernelPath=pre.getKernelPath(),
                                     foundServices=foundServices)
-
-    def _runQemu(self, qemu: Qemu, initArg: str, logPath: str,
-                 networkResult: NetworkResult, timeout: int) -> None:
-        """Run QEMU with network-up notification, clean Ctrl+C and SIGTERM handling."""
-        def _sigterm(*_):
-            raise KeyboardInterrupt
-
-        old_handler = signal.signal(signal.SIGTERM, _sigterm)
-        try:
-            qemu.run(initArg, logPath, networkResult=networkResult, timeout=timeout,
-                     on_line=makeNetworkMonitor(networkResult))
-        except subprocess.TimeoutExpired:
-            logger.info("Session timed out")
-        except KeyboardInterrupt:
-            logger.info("Interrupted — QEMU shutting down")
-        finally:
-            signal.signal(signal.SIGTERM, old_handler)
 
     def boot(self) -> None:
         findings = self._loadFindings()

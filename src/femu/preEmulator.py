@@ -147,21 +147,24 @@ def classifyNetwork(candidates: list, ports: list) -> NetworkResult:
 
 class PreEmulator:
     def __init__(self, imagePath: str, possibleInits: list[str], servicesFound: bool,
-                 arch: Architecture, endiannes: Endianess, kernelsPath: str,
-                 mountPoint: str = "", workDir: str = ""):
+                 arch: Architecture, endiannes: Endianess,  kernelVersion: str, 
+                 kernelsPath: str, mountPoint: str = "", workDir: str = ""):
 
         self.imagePath = imagePath
         self.possibleInits = possibleInits
         self.architecture = arch
         self.endiannes = endiannes
+        self.kernelVersion = kernelVersion
         self.servicesFound = servicesFound
         self.kernelsPath = kernelsPath
-
+        
         if len(self.possibleInits) == 0:
             raise ValueError("No possible inits provided")
 
         self.mountPoint = mountPoint or tempfile.mkdtemp(prefix="femu-mount-", dir="/tmp")
         self.workDir    = workDir    or tempfile.mkdtemp(prefix="femu-work-",  dir="/tmp")
+
+        self.partialResult: Optional[ProbeResult] = None  # Incase ping-only success after exhausting all inits
 
         self.backupFile: str | None = None
         self.backupData: str | None = None
@@ -218,9 +221,15 @@ class PreEmulator:
         if self.architecture == Architecture.ARM:
             return os.path.join(self.kernelsPath, "zImage.armel")
         elif self.architecture == Architecture.MIPS and self.endiannes == Endianess.BIG:
-            return os.path.join(self.kernelsPath, "vmlinux.mipseb.4")
+            if self.kernelVersion.strip().startswith("2."):
+                return os.path.join(self.kernelsPath, "vmlinux.mipseb.2")
+            else: # default to 4.x for MIPS if version inference fails or is inconclusive
+                return os.path.join(self.kernelsPath, "vmlinux.mipseb.4")
         elif self.architecture == Architecture.MIPS and self.endiannes == Endianess.LITTLE:
-            return os.path.join(self.kernelsPath, "vmlinux.mipsel.4")
+            if self.kernelVersion.strip().startswith("2."):
+                return os.path.join(self.kernelsPath, "vmlinux.mipsel.2")
+            else: # default to 4.x for MIPS if version inference fails or is inconclusive
+                return os.path.join(self.kernelsPath, "vmlinux.mipsel.4")
         raise ValueError("Unsupported architecture or endianness")
 
     def getNetworkInfo(self, kernelLogPath: str) -> tuple[list, list]:
@@ -379,13 +388,22 @@ class PreEmulator:
                 initArg, networkResult, self.workDir, self.qemu.run)
             self._restoreBackupIfNeeded()
 
+            if pingReachable:
+                logger.info(f"Init {init} produced a ping-reachable emulation")
+                self.partialResult = ProbeResult(initArg, networkResult, modifiedGuestFile, injectedContent,
+                                                 pingReachable=pingReachable, serviceReachable=serviceReachable)
+
             if serviceReachable:
                 return ProbeResult(initArg, networkResult, modifiedGuestFile, injectedContent,
                                    pingReachable=pingReachable, serviceReachable=serviceReachable)
 
             logger.warning(f"Init {init} did not produce a reachable device — trying next")
 
-        logger.error("All inits exhausted without a reachable emulation")
+        if self.partialResult:
+            logger.warning(f"No init produced a fully reachable emulation, but at least one was ping-reachable. Returning partial result.")
+            return self.partialResult
+        
+        logger.error(f"All inits exhausted without producing a reachable emulation")
         return None
 
 
