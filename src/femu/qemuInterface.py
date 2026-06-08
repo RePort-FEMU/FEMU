@@ -312,6 +312,7 @@ class Qemu:
 
         stop_event    = threading.Event()
         early_stopped = False
+        quit_sent     = False
         start_time    = time.monotonic()
 
         process    = subprocess.Popen(cmd, stderr=subprocess.PIPE)
@@ -331,16 +332,19 @@ class Qemu:
                     early_stopped = True
                     logger.info("Early termination triggered — sending quit to QEMU.")
                     self._sendMonitorCommand("quit")
+                    quit_sent = True
                     break
                 if process.poll() is not None:
                     break
                 if time.monotonic() >= deadline:
                     self._sendMonitorCommand("quit")
+                    quit_sent = True
                     raise subprocess.TimeoutExpired(cmd, timeout)
                 time.sleep(0.5)
         finally:
             stop_event.set()
-            self._sendMonitorCommand("quit")
+            if not quit_sent:
+                self._sendMonitorCommand("quit")
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
