@@ -309,7 +309,11 @@ def populateEtc(rootPath: str) -> None:
     for filePath, content in essentials.items():
         if not isFileInGuestNotEmpty(rootPath, filePath):
             fullPath = readGuestLink(guestToHostPath(rootPath, filePath), rootPath)
-            os.makedirs(os.path.dirname(fullPath), exist_ok=True)
+            parentPath = os.path.dirname(fullPath)
+            if os.path.exists(parentPath) and not os.path.isdir(parentPath):
+                logger.debug(f"Skipping essential file {filePath}: parent {parentPath} is not a directory")
+                continue
+            os.makedirs(parentPath, exist_ok=True)
             with open(fullPath, "w") as f:
                 f.write(content)
                 logger.debug(f"Created essential file: {fullPath}")  
