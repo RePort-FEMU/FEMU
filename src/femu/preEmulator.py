@@ -7,7 +7,7 @@ import os
 from typing import Optional
 
 from .util import mountedImage
-from .guestUtils import hostToGuestPath, guestToHostPath
+from .guestUtils import hostToGuestPath, guestToHostPath, readGuestLink
 from .common import Endianess, Architecture, NetworkResult, ProbeResult
 from .qemuInterface import Qemu
 from .kernelLogUtils import findBridges, findInterfaceIps, findPorts, findMacChanges, findVLANs
@@ -190,42 +190,63 @@ class PreEmulator:
             raise FileNotFoundError(f"File {init} not found")
         return res.stdout.strip()
 
-    def injectInit(self, init: str, initType: str) -> str:
-        """Inject firmadyne scripts into the init and return the kernel init argument."""
+    def injectInit(self, init: str) -> tuple[str, str]:
+        """Inject firmadyne scripts into the init and return the kernel init argument and injection content."""
 
-        def injectFile(filePath: str, extraContent: str = ""):
+        def injectFile(filePath: str, extraContent: str = "") -> str:
+            injection = "\n# Injected by PreEmulator\n"
+            injection += "/firmadyne/busybox echo 'Init injected by PreEmulator'\n"
+            if extraContent:
+                injection += extraContent
+            injection += "/firmadyne/network.sh &\n"
+            if self.servicesFound:
+                injection += "/firmadyne/run_service.sh &\n"
+            injection += "/firmadyne/debug.sh &\n"
+            injection += "/firmadyne/busybox echo 'Entering long sleep to keep init running'\n"
+            injection += "/firmadyne/busybox sleep 36000\n"
+            
             with open(filePath, "a") as f:
-                f.write("\n# Injected by PreEmulator\n")
-                f.write("echo 'Init injected by PreEmulator'\n")
-                if extraContent:
-                    f.write(extraContent)
-                f.write("/firmadyne/network.sh &\n")
-                if self.servicesFound:
-                    f.write("/firmadyne/run_service.sh &\n")
-                f.write("/firmadyne/debug.sh &\n")
-                # Long sleep for devices that need it (TEW-828DRU_1.0.7.2, etc...)
-                f.write("/firmadyne/busybox sleep 36000\n")
+                f.write(injection)
+            
+            return injection
 
+        initType = self.getInitType(guestToHostPath(self.mountPoint, init))
         logger.info(f"Injecting init {init} (type: {initType}) into {self.imagePath}")
 
-        if os.path.basename(init) == "preInit.sh":
-            injectFile(guestToHostPath(self.mountPoint, init))
-            self.backupFile = None
-            self.backupData = None
-        else:
-            if "ELF" not in initType and "symbolic link" not in initType: # possibly a script
-                self.backupFile = guestToHostPath(self.mountPoint, init)
-                self.backupData = _readWithException(self.backupFile)
-                injectFile(self.backupFile)
-                return "rdinit=/firmadyne/preInit.sh"
-            elif "ELF" in initType or "symbolic link" in initType: # netgear R6200 TODO: improve this check
-                self.backupFile = guestToHostPath(self.mountPoint, "/firmadyne/preInit.sh")
-                self.backupData = _readWithException(self.backupFile)
-                injectFile(self.backupFile, f"exec {init} &\n")
-                return "init=/firmadyne/preInit.sh"
+        initArg = ""
+        injection = ""
 
-        # FIRMAE diff
-        return "init=/firmadyne/preInit.sh"
+        if os.path.basename(init) == "preInit.sh":
+            self.backupFile = init
+            self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
+            injection = injectFile(guestToHostPath(self.mountPoint, init))
+            initArg = f"init={init}"
+        else:
+            # FIRMAE diff
+            # TODO: Check if this can work
+            # If the init is a symlink try to dereference it
+            dereferencedInit = init
+            while os.path.islink(guestToHostPath(self.mountPoint, dereferencedInit)):
+                dereferencedInit = readGuestLink(dereferencedInit, self.mountPoint)
+            
+            if os.path.isfile(guestToHostPath(self.mountPoint, dereferencedInit)):   
+                logger.debug(f"Init {init} is a symlink to {dereferencedInit} (type: {self.getInitType(guestToHostPath(self.mountPoint, dereferencedInit))})")
+            
+            # TODO: improve script detection
+            if "ELF" not in initType and "symbolic link" not in initType: # script init
+                self.backupFile = init
+                self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
+                # TODO: Maybe add preInit.sh to all inits before anything else runs
+                injection = injectFile(guestToHostPath(self.mountPoint, init))
+                initArg = f"init={init}" 
+            elif "ELF" in initType or "symbolic link" in initType: # netgear R6200 
+                self.backupFile = "/firmadyne/preInit.sh"
+                self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
+                injection = injectFile(self.backupFile, f"exec {init} &\n")
+                initArg = "init=/firmadyne/preInit.sh"
+
+        # FIRMAE diff: Firmae only used init= for binaries. We use it for everything
+        return initArg, injection
 
     def getKernelPath(self) -> str:
         """Return the emulation kernel path for the current architecture."""
@@ -312,7 +333,7 @@ class PreEmulator:
         """Restore the injected init file. Called when an init attempt fails."""
         if self.backupFile and self.backupData is not None:
             with mountedImage(self.imagePath, self.mountPoint) as mp:
-                with open(self.backupFile, "w") as f:
+                with open(guestToHostPath(mp, self.backupFile), "w") as f:
                     f.write(self.backupData)
             logger.debug(f"Restored original init: {self.backupFile}")
         self.backupFile = None
@@ -336,20 +357,9 @@ class PreEmulator:
             logger.info(f"Processing init: {init}")
 
             # --- inject ---
-            modifiedGuestFile = None
-            injectedContent = None
             with mountedImage(self.imagePath, self.mountPoint) as mp:
                 try:
-                    initArg = self.injectInit(
-                        init,
-                        self.getInitType(guestToHostPath(self.mountPoint, init)),
-                    )
-                    # Capture injection record now — backupFile is only valid while mounted
-                    if self.backupFile:
-                        modifiedGuestFile = self.backupFile[len(self.mountPoint):]
-                    if self.backupFile and self.backupData is not None:
-                        with open(self.backupFile, "r", errors="replace") as f:
-                            injectedContent = f.read()[len(self.backupData):]
+                    initArg, injectedContent = self.injectInit(init)
                 except Exception as e:
                     logger.error(f"Failed to inject init {init}: {e}")
                     continue
@@ -366,7 +376,7 @@ class PreEmulator:
                 self.workDir, "kernelLogs",
                 f"qemu.{init[1:].replace('/', '-')}.serial.log",
             )
-            logger.info(f"Running probe QEMU")
+            logger.info(f"Running probe QEMU with initarg: {initArg}")
             try:
                 self.qemu.run(initArg, probeLog, timeout=TIMEOUT)
             except subprocess.TimeoutExpired:
@@ -401,11 +411,11 @@ class PreEmulator:
 
             if pingReachable:
                 logger.info(f"Init {init} produced a ping-reachable emulation")
-                self.partialResult = ProbeResult(initArg, networkResult, modifiedGuestFile, injectedContent,
+                self.partialResult = ProbeResult(initArg, networkResult, self.backupFile, injectedContent,
                                                  pingReachable=pingReachable, serviceReachable=serviceReachable)
 
             if serviceReachable:
-                return ProbeResult(initArg, networkResult, modifiedGuestFile, injectedContent,
+                return ProbeResult(initArg, networkResult, self.backupFile, injectedContent,
                                    pingReachable=pingReachable, serviceReachable=serviceReachable)
 
             logger.warning(f"Init {init} did not produce a reachable device — trying next")
