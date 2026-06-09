@@ -238,7 +238,7 @@ def findServices(rootPath: str) -> dict[str, str]:
         return services
             
     else:
-        logger.warning("No services found in the image.")
+        logger.info("No services found in the image.")
         return {}
     
    
