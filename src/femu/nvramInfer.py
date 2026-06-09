@@ -1,6 +1,6 @@
 import logging
 import os
-import shutil
+import subprocess
 
 from .util import mountedImage
 
@@ -34,10 +34,15 @@ def _parseNvramKeys(probeLog: str) -> list[bytes]:
 
 def inferNvramDefaults(imagePath: str, mountPoint: str, probeLog: str, workDir: str) -> bool:
     """
-    Parse the probe serial log for NVRAM key reads, find the firmware file that
-    contains the most of those keys, and copy it to /firmadyne/nvram_defaults.
+    Parse the probe serial log for NVRAM key reads, find all firmware files that
+    contain more than half of those keys, and write a manifest to /firmadyne/nvram_files.
 
-    Returns True if a defaults file was found and installed.
+    The manifest format mirrors FirmAE: one line per file, space-separated:
+        <guest_path> <matched_key_count> <file_type>
+
+    libnvram reads /firmadyne/nvram_files to locate candidate default-value files.
+
+    Returns True if at least one defaults file was found and the manifest was installed.
     """
     keys = _parseNvramKeys(probeLog)
 
@@ -47,15 +52,13 @@ def inferNvramDefaults(imagePath: str, mountPoint: str, probeLog: str, workDir: 
 
     logger.info(f"Inferring NVRAM defaults from {len(keys)} keys")
 
-    # Save key list for debugging / findings
     keysOut = os.path.join(workDir, "nvram_keys")
     with open(keysOut, "w") as f:
         f.write(f"{len(keys)}\n")
         for k in keys:
             f.write(k.decode() + "\n")
 
-    bestFile: str | None = None
-    bestCount = 0
+    matches: list[tuple[str, int, str]] = []  # (guest_path, count, file_type)
 
     with mountedImage(imagePath, mountPoint) as mp:
         for dirpath, _, filenames in os.walk(mp):
@@ -70,20 +73,33 @@ def inferNvramDefaults(imagePath: str, mountPoint: str, probeLog: str, workDir: 
                 except OSError:
                     continue
                 count = sum(1 for k in keys if k in data)
-                if count > len(keys) * _MATCH_THRESHOLD and count > bestCount:
-                    bestCount = count
-                    bestFile = fullPath
+                if count > len(keys) * _MATCH_THRESHOLD:
+                    guestPath = fullPath[len(mp):]  # strip mount point prefix
+                    try:
+                        result = subprocess.check_output(
+                            ["file", fullPath], stderr=subprocess.DEVNULL
+                        ).decode(errors="replace").strip()
+                        fileType = result.split(" ", 1)[1].replace(" ", "_") if " " in result else "unknown"
+                    except Exception:
+                        fileType = "unknown"
+                    if "symbolic" not in fileType:
+                        matches.append((guestPath, count, fileType))
 
-        if bestFile:
-            dest = os.path.join(mp, "firmadyne", "nvram_defaults")
-            shutil.copy2(bestFile, dest)
-            logger.info(
-                f"Installed NVRAM defaults: {bestFile.replace(mp, '')} "
-                f"({bestCount}/{len(keys)} keys matched)"
-            )
+        if not matches:
+            logger.debug("No NVRAM defaults files found in firmware")
+            return False
 
-    if not bestFile:
-        logger.debug("No NVRAM defaults file found in firmware")
-        return False
+        manifestOut = os.path.join(workDir, "nvram_files")
+        with open(manifestOut, "w") as f:
+            for guestPath, count, fileType in matches:
+                f.write(f"{guestPath} {count} {fileType}\n")
+
+        dest = os.path.join(mp, "firmadyne", "nvram_files")
+        with open(manifestOut, "r") as src, open(dest, "w") as dst:
+            dst.write(src.read())
+
+        logger.info(
+            f"Installed NVRAM defaults manifest: {len(matches)} file(s) → /firmadyne/nvram_files"
+        )
 
     return True
