@@ -209,6 +209,35 @@ class PreEmulator:
                 f.write(injection)
             
             return injection
+        
+        # TODO: Check if this work any better
+        def injectScripts(filePath: str, extraContent: str = "") -> str:
+            injection = "#!/bin/sh\n"
+            injection += "\n# Injected by PreEmulator\n"
+            injection += "/firmadyne/preInit.sh\n"
+            injection += "/firmadyne/busybox echo 'Init injected by PreEmulator'\n"
+            if extraContent:
+                injection += extraContent
+            injection += "/firmadyne/network.sh &\n"
+            if self.servicesFound:
+                injection += "/firmadyne/run_service.sh &\n"
+            injection += "/firmadyne/debug.sh &\n"
+            # injection += "/firmadyne/busybox echo 'Entering long sleep to keep init running'\n"
+            # injection += "/firmadyne/busybox sleep 36000\n"
+            
+            # Prepend injection to the file so it runs before any infinite loops
+            try:
+                with open(filePath, "r", errors="replace") as f:
+                    content = f.read()
+                with open(filePath, "w") as f:
+                    f.write(injection + "\n" + content)
+            except Exception as e:
+                logger.error(f"Failed to inject test into {filePath}: {e}")
+                raise
+            
+            logger.debug(f"Injected test content into {filePath}:\n{injection} \n--- Original content ---\n{content}")
+            
+            return injection
 
         initType = self.getInitType(guestToHostPath(self.mountPoint, init))
         logger.info(f"Injecting init {init} (type: {initType}) into {self.imagePath}")
@@ -226,10 +255,16 @@ class PreEmulator:
             # TODO: Check if this can work
             # If the init is a symlink try to dereference it
             dereferencedInit = init
+            visited: set[str] = {init}
             while os.path.islink(guestToHostPath(self.mountPoint, dereferencedInit)):
-                dereferencedInit = readGuestLink(dereferencedInit, self.mountPoint)
+                resolved = readGuestLink(dereferencedInit, self.mountPoint, translateToHost=False)
+                if resolved in visited:
+                    logger.warning(f"Circular symlink detected at {dereferencedInit} → {resolved}, stopping")
+                    break
+                visited.add(resolved)
+                dereferencedInit = resolved
             
-            if os.path.isfile(guestToHostPath(self.mountPoint, dereferencedInit)):   
+            if dereferencedInit != init and os.path.isfile(guestToHostPath(self.mountPoint, dereferencedInit)):
                 logger.debug(f"Init {init} is a symlink to {dereferencedInit} (type: {self.getInitType(guestToHostPath(self.mountPoint, dereferencedInit))})")
             
             # TODO: improve script detection
@@ -250,18 +285,21 @@ class PreEmulator:
 
     def getKernelPath(self) -> str:
         """Return the emulation kernel path for the current architecture."""
+        # TODO: It seems like kernel 4 is much better on running all the images investigate !
         if self.architecture == Architecture.ARM:
             return os.path.join(self.kernelsPath, "zImage.armel")
         elif self.architecture == Architecture.MIPS and self.endiannes == Endianess.BIG:
-            if self.kernelVersion.strip().startswith("2."):
-                return os.path.join(self.kernelsPath, "vmlinux.mipseb.2")
-            else: # default to 4.x for MIPS if version inference fails or is inconclusive
-                return os.path.join(self.kernelsPath, "vmlinux.mipseb.4")
+            # if self.kernelVersion.strip().startswith("2."):
+            #     return os.path.join(self.kernelsPath, "vmlinux.mipseb.2")
+            # else: # default to 4.x for MIPS if version inference fails or is inconclusive
+            #     return os.path.join(self.kernelsPath, "vmlinux.mipseb.4")
+            return os.path.join(self.kernelsPath, "vmlinux.mipseb.4")
         elif self.architecture == Architecture.MIPS and self.endiannes == Endianess.LITTLE:
-            if self.kernelVersion.strip().startswith("2."):
-                return os.path.join(self.kernelsPath, "vmlinux.mipsel.2")
-            else: # default to 4.x for MIPS if version inference fails or is inconclusive
-                return os.path.join(self.kernelsPath, "vmlinux.mipsel.4")
+            # if self.kernelVersion.strip().startswith("2."):
+            #     return os.path.join(self.kernelsPath, "vmlinux.mipsel.2")
+            # else: # default to 4.x for MIPS if version inference fails or is inconclusive
+            #     return os.path.join(self.kernelsPath, "vmlinux.mipsel.4")
+            return os.path.join(self.kernelsPath, "vmlinux.mipsel.4")
         raise ValueError("Unsupported architecture or endianness")
 
     def getNetworkInfo(self, kernelLogPath: str) -> tuple[list, list]:
@@ -426,21 +464,3 @@ class PreEmulator:
         
         logger.error(f"All inits exhausted without producing a reachable emulation")
         return None
-
-
-# ---------------------------------------------------------------------------
-# Module-level helpers
-# ---------------------------------------------------------------------------
-
-def _readWithException(filePath: str) -> str:
-    data = ""
-    with open(filePath, "rb") as f:
-        while True:
-            try:
-                line = f.readline().decode()
-                if not line:
-                    break
-                data += line
-            except Exception:
-                data += ""
-    return data
