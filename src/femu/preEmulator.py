@@ -190,54 +190,60 @@ class PreEmulator:
             raise FileNotFoundError(f"File {init} not found")
         return res.stdout.strip()
 
-    def injectInit(self, init: str) -> tuple[str, str]:
-        """Inject firmadyne scripts into the init and return the kernel init argument and injection content."""
+    def _wrappingInjection(self, filePath: str, extraContent: str = "") -> str:
+        """Inject content into a script file, preserving the original content."""
+        preInjection = "#!/bin/sh\n"
+        preInjection += "\n# Injected by PreEmulator\n"
+        preInjection += "/firmadyne/preInit.sh\n"
+        if extraContent:
+            preInjection += extraContent
+        preInjection += "/firmadyne/network.sh &\n"
+        if self.servicesFound:
+            preInjection += "/firmadyne/run_service.sh &\n"
+        preInjection += "/firmadyne/debug.sh &\n"
+        preInjection += "\n/firmadyne/busybox sleep 36000\n"
+        preInjection += "\n# End of injection\n"
+        
+        postInjection = "\n# Post-injection content\n"
+        postInjection += "\n/firmadyne/busybox sleep 36000\n"
 
-        def injectFile(filePath: str, extraContent: str = "") -> str:
-            injection = "\n# Injected by PreEmulator\n"
-            injection += "/firmadyne/busybox echo 'Init injected by PreEmulator'\n"
-            if extraContent:
-                injection += extraContent
-            injection += "/firmadyne/network.sh &\n"
-            if self.servicesFound:
-                injection += "/firmadyne/run_service.sh &\n"
-            injection += "/firmadyne/debug.sh &\n"
-            injection += "/firmadyne/busybox echo 'Entering long sleep to keep init running'\n"
-            injection += "/firmadyne/busybox sleep 36000\n"
-            
+        try:
+            with open(filePath, "r", errors="replace") as f:
+                content = f.read()
+            with open(filePath, "w") as f:
+                f.write(preInjection + content + postInjection)
+        except Exception as e:
+            logger.error(f"Failed to inject into script {filePath}: {e}")
+            raise
+
+        return preInjection + content + postInjection
+    
+    def _appendingInjection(self, filePath: str, extraContent: str = "") -> str:
+        """Inject content by appending to the end of the file."""
+        injection = "\n# Injected by PreEmulator\n"
+        injection += "/firmadyne/busybox echo 'Init injected by PreEmulator'\n"
+        if extraContent:
+            injection += extraContent
+        injection += "/firmadyne/network.sh &\n"
+        if self.servicesFound:
+            injection += "/firmadyne/run_service.sh &\n"
+        injection += "/firmadyne/debug.sh &\n"
+        injection += "/firmadyne/busybox echo 'Entering long sleep to keep init running'\n"
+        injection += "/firmadyne/busybox sleep 36000\n"
+
+        try:
+            with open(filePath, "r", errors="replace") as f:
+                content = f.read()
             with open(filePath, "a") as f:
                 f.write(injection)
-            
-            return injection
-        
-        # TODO: Check if this work any better
-        def injectScripts(filePath: str, extraContent: str = "") -> str:
-            injection = "#!/bin/sh\n"
-            injection += "\n# Injected by PreEmulator\n"
-            injection += "/firmadyne/preInit.sh\n"
-            injection += "/firmadyne/busybox echo 'Init injected by PreEmulator'\n"
-            if extraContent:
-                injection += extraContent
-            injection += "/firmadyne/network.sh &\n"
-            if self.servicesFound:
-                injection += "/firmadyne/run_service.sh &\n"
-            injection += "/firmadyne/debug.sh &\n"
-            # injection += "/firmadyne/busybox echo 'Entering long sleep to keep init running'\n"
-            # injection += "/firmadyne/busybox sleep 36000\n"
-            
-            # Prepend injection to the file so it runs before any infinite loops
-            try:
-                with open(filePath, "r", errors="replace") as f:
-                    content = f.read()
-                with open(filePath, "w") as f:
-                    f.write(injection + "\n" + content)
-            except Exception as e:
-                logger.error(f"Failed to inject test into {filePath}: {e}")
-                raise
-            
-            logger.debug(f"Injected test content into {filePath}:\n{injection} \n--- Original content ---\n{content}")
-            
-            return injection
+        except Exception as e:
+            logger.error(f"Failed to inject into {filePath}: {e}")
+            raise
+
+        return content + injection
+
+    def injectInit(self, init: str) -> tuple[str, str]:
+        """Inject firmadyne scripts into the init and return the kernel init argument and injection content."""
 
         initType = self.getInitType(guestToHostPath(self.mountPoint, init))
         logger.info(f"Injecting init {init} (type: {initType}) into {self.imagePath}")
@@ -248,7 +254,7 @@ class PreEmulator:
         if os.path.basename(init) == "preInit.sh":
             self.backupFile = init
             self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
-            injection = injectFile(guestToHostPath(self.mountPoint, init))
+            injection = self._appendingInjection(guestToHostPath(self.mountPoint, init))
             initArg = f"init={init}"
         else:
             # FIRMAE diff
@@ -271,13 +277,12 @@ class PreEmulator:
             if "ELF" not in initType and "symbolic link" not in initType: # script init
                 self.backupFile = init
                 self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
-                # TODO: Maybe add preInit.sh to all inits before anything else runs
-                injection = injectFile(guestToHostPath(self.mountPoint, init))
+                injection = self._wrappingInjection(guestToHostPath(self.mountPoint, init))
                 initArg = f"init={init}" 
             elif "ELF" in initType or "symbolic link" in initType: # netgear R6200 
                 self.backupFile = "/firmadyne/preInit.sh"
                 self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
-                injection = injectFile(self.backupFile, f"exec {init} &\n")
+                injection = self._appendingInjection(guestToHostPath(self.mountPoint, self.backupFile), f"exec {init} &\n")
                 initArg = "init=/firmadyne/preInit.sh"
 
         # FIRMAE diff: Firmae only used init= for binaries. We use it for everything

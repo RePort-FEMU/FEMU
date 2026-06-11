@@ -257,7 +257,8 @@ class Emulator:
         guestFile = inj.get("modifiedGuestFile")
         content   = inj.get("injectedContent")
         if not guestFile or not content:
-            return True  # nothing to inject (preInit.sh case)
+            logger.error("No injection information found in findings — cannot apply injection.")
+            return False
 
         imagePath = findings["emulation"]["imagePath"]
         workDir   = findings["emulation"]["workDir"]
@@ -274,7 +275,7 @@ class Emulator:
             if "# Injected by PreEmulator" in current:
                 logger.debug("Injection already present — skipping re-inject")
                 return True
-            with open(hostPath, "a") as f:
+            with open(hostPath, "w") as f:
                 f.write(content)
             logger.info(f"Re-applied injection to {guestFile}")
         return True
