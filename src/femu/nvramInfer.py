@@ -21,6 +21,9 @@ def _parseNvramKeys(probeLog: str) -> list[bytes]:
                 if len(parts) < 3 or not parts[1].decode(errors="ignore").isnumeric():
                     continue
                 key = parts[2][: int(parts[1])]
+                # If parts2 does is not long enough to contain the key, skip it. This can happen if the log is truncated or malformed.
+                if len(key) < int(parts[1]):
+                    continue
                 try:
                     key.decode()
                 except Exception:
@@ -65,7 +68,12 @@ def inferNvramDefaults(imagePath: str, mountPoint: str, probeLog: str, workDir: 
             if os.path.join(mp, "firmadyne") in dirpath:
                 continue
             for filename in filenames:
+                # If the directory is /dev/null or similar, skip it to avoid reading special files
+                if filename in ("null", "zero", "random", "urandom"):
+                    continue
+                
                 fullPath = os.path.join(dirpath, filename)
+                
                 if not os.path.isfile(fullPath) or os.path.islink(fullPath):
                     continue
                 try:
