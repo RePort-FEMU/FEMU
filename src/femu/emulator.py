@@ -5,7 +5,7 @@ import shutil
 import os
 import signal
 import subprocess
-from time import sleep
+from time import sleep, monotonic
 
 from .common import Architecture, Endianess, NetworkResult, ProbeResult, GIGA
 from .qemuInterface import Qemu
@@ -227,12 +227,15 @@ class Emulator:
     def _exportFindings(self, stage: str, workDir: str | None = None,
                         probeResult: ProbeResult | None = None,
                         kernelPath: str = "",
-                        foundServices: dict | None = None) -> dict:
+                        foundServices: dict | None = None,
+                        extractionSeconds: float | None = None,
+                        preEmulationSeconds: float | None = None) -> dict:
         if workDir is None:
             workDir = getExportDir(self.workDir, self.tag)
         findings = buildFindings(stage, workDir, self.config.firmwarePath,
                                  self.tag, self.brand, self.architecture, self.endianess,
-                                 probeResult, kernelPath, foundServices)
+                                 probeResult, kernelPath, foundServices,
+                                 extractionSeconds, preEmulationSeconds)
         saveFindings(findings, workDir)
         saveFindingsToDB(findings, self.config.sqlIP, self.config.sqlPort, self.db_id)
         return findings
@@ -396,6 +399,7 @@ class Emulator:
             logger.info("No database configured, skipping image registration. No further DB updates will be possible for this firmware.")
 
         logger.info(f"Step 1: Extracting firmware image {self.config.firmwarePath}")
+        _t0 = monotonic()
         if not self.extract():
             logger.error("Extraction failed, aborting emulator run.")
             self._exportFindings("extraction_failed")
@@ -405,6 +409,7 @@ class Emulator:
             logger.error("Failed to collect information, aborting emulator run.")
             self._exportFindings("collect_info_failed")
             return
+        extractionSeconds = monotonic() - _t0
 
         if not checkCompatibility(self.architecture, self.endianess):
             logger.error(f"Incompatible architecture or endianess: {self.architecture}, {self.endianess}")
@@ -472,11 +477,15 @@ class Emulator:
             os.path.join(workDir, "mnt"),
             workDir,
         )
+        _t1 = monotonic()
         probeResult = pre.start()
+        preEmulationSeconds = monotonic() - _t1
 
         if probeResult is None:
             logger.error("Pre-emulation probe failed for all inits — aborting.")
-            self._exportFindings("probe_failed", workDir=workDir, foundServices=foundServices)
+            self._exportFindings("probe_failed", workDir=workDir, foundServices=foundServices,
+                                 extractionSeconds=extractionSeconds,
+                                 preEmulationSeconds=preEmulationSeconds)
             return
 
         nr = probeResult.networkResult
@@ -496,7 +505,9 @@ class Emulator:
         return self._exportFindings(status, workDir=workDir,
                                     probeResult=probeResult,
                                     kernelPath=pre.getKernelPath(),
-                                    foundServices=foundServices)
+                                    foundServices=foundServices,
+                                    extractionSeconds=extractionSeconds,
+                                    preEmulationSeconds=preEmulationSeconds)
 
     def boot(self) -> None:
         findings = self._loadFindings()

@@ -27,13 +27,14 @@ def verifyEmulation(
     networkResult: NetworkResult,
     workDir: str,
     runQemu: Callable,
-) -> tuple[bool, bool]:
+) -> tuple[bool, bool, float | None]:
     """
     Boot the emulated device with the classified network config and verify reachability.
 
-    Returns (pingReachable, serviceReachable):
-        pingReachable    — at least one candidate IP responded to ICMP ping.
-        serviceReachable — at least one TCP/HTTP service responded (strong confirmation).
+    Returns (pingReachable, serviceReachable, serviceResponseTime):
+        pingReachable       — at least one candidate IP responded to ICMP ping.
+        serviceReachable    — at least one TCP/HTTP service responded (strong confirmation).
+        serviceResponseTime — seconds from QEMU start until service responded, or None.
     QEMU is stopped as soon as serviceReachable becomes True.
     """
     verifyLog = os.path.join(workDir, "kernelLogs", "qemu.verify.serial.log")
@@ -45,19 +46,20 @@ def verifyEmulation(
         portsToCheck = tcpPorts
         if not portsToCheck:
             logger.warning("User networking with no detected TCP ports — cannot verify reachability")
-            return False, True   # assume up; no meaningful check possible
+            return False, True, None
     elif networkResult.candidates:
         checkIps     = [c[0] for c in networkResult.candidates]
         checkPing    = True
         portsToCheck = [80, 443] + [p for p in tcpPorts if p not in (80, 443)]
     else:
         logger.warning("No check IP available — skipping verification")
-        return False, True
+        return False, True, None
 
-    startTime       = time.monotonic()
-    lastCheck       = 0.0
-    pingReachable   = [False]
-    serviceReachable= [False]
+    startTime           = time.monotonic()
+    lastCheck           = 0.0
+    pingReachable       = [False]
+    serviceReachable    = [False]
+    serviceResponseTime = [None]
 
     def onLine(line: str | None) -> bool:
         nonlocal lastCheck
@@ -84,6 +86,7 @@ def verifyEmulation(
                     proto = "HTTP" if port in (80, 443) else "TCP"
                     logger.info(f"{proto} service reachable: {ip}:{port}")
                     serviceReachable[0] = True
+                    serviceResponseTime[0] = round(elapsed, 1)
                     break
 
             if serviceReachable[0]:
@@ -101,8 +104,9 @@ def verifyEmulation(
     except subprocess.TimeoutExpired:
         logger.warning("Verify QEMU hard timeout — treating as not reachable")
 
-    logger.info(f"Verify result: ping={pingReachable[0]} service={serviceReachable[0]}")
-    return pingReachable[0], serviceReachable[0]
+    logger.info(f"Verify result: ping={pingReachable[0]} service={serviceReachable[0]} "
+                f"responseTime={serviceResponseTime[0]}s")
+    return pingReachable[0], serviceReachable[0], serviceResponseTime[0]
 
 
 _WEB_PORTS = {80, 443, 8080, 8443, 8000, 8888}

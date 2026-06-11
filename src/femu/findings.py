@@ -34,6 +34,8 @@ def buildFindings(
     probeResult: ProbeResult | None = None,
     kernelPath: str = "",
     foundServices: dict | None = None,
+    extractionSeconds: float | None = None,
+    preEmulationSeconds: float | None = None,
 ) -> dict:
     findings: dict = {
         "stage": stage,
@@ -83,6 +85,13 @@ def buildFindings(
 
     if foundServices is not None:
         findings["services"] = foundServices
+
+    findings["timings"] = {
+        "extractionSeconds": round(extractionSeconds, 1) if extractionSeconds is not None else None,
+        "preEmulationSeconds": round(preEmulationSeconds, 1) if preEmulationSeconds is not None else None,
+        "serviceResponseSeconds": round(probeResult.serviceResponseTime, 1)
+            if probeResult and probeResult.serviceResponseTime is not None else None,
+    }
 
     return findings
 

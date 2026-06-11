@@ -201,9 +201,8 @@ class PreEmulator:
         if self.servicesFound:
             preInjection += "/firmadyne/run_service.sh &\n"
         preInjection += "/firmadyne/debug.sh &\n"
-        preInjection += "\n/firmadyne/busybox sleep 36000\n"
         preInjection += "\n# End of injection\n"
-        
+
         postInjection = "\n# Post-injection content\n"
         postInjection += "\n/firmadyne/busybox sleep 36000\n"
 
@@ -221,14 +220,12 @@ class PreEmulator:
     def _appendingInjection(self, filePath: str, extraContent: str = "") -> str:
         """Inject content by appending to the end of the file."""
         injection = "\n# Injected by PreEmulator\n"
-        injection += "/firmadyne/busybox echo 'Init injected by PreEmulator'\n"
         if extraContent:
             injection += extraContent
         injection += "/firmadyne/network.sh &\n"
         if self.servicesFound:
             injection += "/firmadyne/run_service.sh &\n"
         injection += "/firmadyne/debug.sh &\n"
-        injection += "/firmadyne/busybox echo 'Entering long sleep to keep init running'\n"
         injection += "/firmadyne/busybox sleep 36000\n"
 
         try:
@@ -448,18 +445,20 @@ class PreEmulator:
             })
 
             # --- verify reachability (mirrors check_emulation.sh) ---
-            pingReachable, serviceReachable = verifyEmulation(
+            pingReachable, serviceReachable, serviceResponseTime = verifyEmulation(
                 initArg, networkResult, self.workDir, self.qemu.run)
             self._restoreBackupIfNeeded()
 
             if pingReachable:
                 logger.info(f"Init {init} produced a ping-reachable emulation")
                 self.partialResult = ProbeResult(initArg, networkResult, self.backupFile, injectedContent,
-                                                 pingReachable=pingReachable, serviceReachable=serviceReachable)
+                                                 pingReachable=pingReachable, serviceReachable=serviceReachable,
+                                                 serviceResponseTime=serviceResponseTime)
 
             if serviceReachable:
                 return ProbeResult(initArg, networkResult, self.backupFile, injectedContent,
-                                   pingReachable=pingReachable, serviceReachable=serviceReachable)
+                                   pingReachable=pingReachable, serviceReachable=serviceReachable,
+                                   serviceResponseTime=serviceResponseTime)
 
             logger.warning(f"Init {init} did not produce a reachable device — trying next")
 

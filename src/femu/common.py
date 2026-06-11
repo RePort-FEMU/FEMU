@@ -47,6 +47,7 @@ class ProbeResult:
     injectedContent: str | None     # content appended to that file
     pingReachable: bool = False     # ICMP ping responded during verify
     serviceReachable: bool = False  # TCP/HTTP service responded during verify
+    serviceResponseTime: float | None = None  # seconds from QEMU start to first service response
 
 @dataclass
 class NetworkResult:
