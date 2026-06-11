@@ -566,12 +566,14 @@ def unmountImage(mountPoint: str) -> None:
     Raises:
         RuntimeError: If the unmounting fails.
     """
+    mountPoint = os.path.realpath(mountPoint)
+
     if not os.path.exists(mountPoint):
         raise FileNotFoundError(f"Mount point {mountPoint} does not exist.")
-    
+
     if not os.path.isdir(mountPoint):
         raise ValueError(f"Mount point {mountPoint} is not a directory.")
-    
+
     # Find the loop device associated with the mount point by checking /proc/mounts
     with open("/proc/mounts", "r") as mountsFile:
         mounts = mountsFile.readlines()
