@@ -400,6 +400,7 @@ class PreEmulator:
             with mountedImage(self.imagePath, self.mountPoint) as mp:
                 try:
                     initArg, injectedContent = self.injectInit(init)
+                    injectedFile = self.backupFile
                 except Exception as e:
                     logger.error(f"Failed to inject init {init}: {e}")
                     continue
@@ -451,12 +452,12 @@ class PreEmulator:
 
             if pingReachable:
                 logger.info(f"Init {init} produced a ping-reachable emulation")
-                self.partialResult = ProbeResult(initArg, networkResult, self.backupFile, injectedContent,
+                self.partialResult = ProbeResult(initArg, networkResult, injectedFile, injectedContent,
                                                  pingReachable=pingReachable, serviceReachable=serviceReachable,
                                                  serviceResponseTime=serviceResponseTime)
 
             if serviceReachable:
-                return ProbeResult(initArg, networkResult, self.backupFile, injectedContent,
+                return ProbeResult(initArg, networkResult, injectedFile, injectedContent,
                                    pingReachable=pingReachable, serviceReachable=serviceReachable,
                                    serviceResponseTime=serviceResponseTime)
 

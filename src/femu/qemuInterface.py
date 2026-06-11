@@ -305,6 +305,11 @@ class Qemu:
                     networkResult.ports, True, [],
                 )
 
+        for name in ("qemu.monitor", "qemu.S1"):
+            p = os.path.join(self.tempdir, name)
+            if os.path.exists(p):
+                os.unlink(p)
+
         cmd = self._buildCommand(initArg, logPath, networkResult)
 
         def _composed(line: str | None) -> bool:
@@ -335,6 +340,7 @@ class Qemu:
                     quit_sent = True
                     break
                 if process.poll() is not None:
+                    logger.warning(f"QEMU exited on its own (returncode={process.returncode}) after {time.monotonic() - start_time:.1f}s")
                     break
                 if time.monotonic() >= deadline:
                     self._sendMonitorCommand("quit")
