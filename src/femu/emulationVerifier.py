@@ -6,6 +6,7 @@ import os
 import ssl
 import urllib.request
 import urllib.error
+from typing import Optional
 
 from collections.abc import Callable
 from .common import NetworkResult
@@ -17,7 +18,7 @@ _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
 
-VERIFY_TIMEOUT = 720   # seconds before giving up on a verify run
+VERIFY_TIMEOUT = 360   # seconds before giving up on a verify run
 BOOT_WAIT      = 10    # minimum seconds before the first connectivity check (mirrors check_emulation.sh sleep 10)
 CHECK_INTERVAL = 5     # seconds between consecutive checks
 
@@ -59,7 +60,7 @@ def verifyEmulation(
     lastCheck           = 0.0
     pingReachable       = [False]
     serviceReachable    = [False]
-    serviceResponseTime = [None]
+    serviceResponseTime: list[Optional[float]] = [None]
 
     def onLine(line: str | None) -> bool:
         nonlocal lastCheck
