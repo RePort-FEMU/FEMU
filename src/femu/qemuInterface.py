@@ -9,10 +9,14 @@ import os
 from collections.abc import Callable
 
 from .common import Architecture, Endianess, NetworkResult
+from .freezeDiagnostics import (
+    capture_freeze_state, FREEZE_MIN_BOOT, FREEZE_STALL, FREEZE_MIN_BYTES,
+)
 
 logger = logging.getLogger(__name__)
 
 _active_qemu_processes: set[subprocess.Popen] = set()
+
 
 def kill_all_qemu() -> None:
     """Terminate every tracked QEMU process. Safe to call from a signal handler."""
@@ -280,7 +284,8 @@ class Qemu:
 
     def run(self, initArg: str, logPath: str = "", timeout: int = 300,
             on_line: Callable[[str | None], bool] | None = None,
-            networkResult: NetworkResult | None = None) -> None:
+            networkResult: NetworkResult | None = None,
+            capture_freeze: bool = True) -> None:
         """
         Run the QEMU emulator.
 
@@ -288,6 +293,10 @@ class Qemu:
         networkResult set   →  final emulation mode:
                                  isUserNetwork=True  → SLIRP + port forwarding
                                  isUserNetwork=False → TAP networking
+
+        capture_freeze      →  if the guest's serial output stalls while QEMU is
+                               still alive, snapshot the guest CPU and write a
+                               '<log>.freeze.txt' diagnostic (idle/blocked vs spin).
         """
         if not logPath:
             logPath = os.path.join(self.workDir, "qemu.serial.log")
@@ -332,6 +341,9 @@ class Qemu:
 
         try:
             deadline = time.monotonic() + timeout
+            freeze_captured = False
+            last_log_size   = 0
+            last_log_growth = time.monotonic()
             while True:
                 if stop_event.is_set():
                     early_stopped = True
@@ -346,6 +358,22 @@ class Qemu:
                     self._sendMonitorCommand("quit")
                     quit_sent = True
                     raise subprocess.TimeoutExpired(cmd, timeout)
+
+                # Freeze watchdog: serial output went silent while QEMU is alive.
+                if capture_freeze and not freeze_captured and os.path.exists(logPath):
+                    size = os.path.getsize(logPath)
+                    now  = time.monotonic()
+                    if size != last_log_size:
+                        last_log_size, last_log_growth = size, now
+                    elif (size > FREEZE_MIN_BYTES
+                          and now - start_time > FREEZE_MIN_BOOT
+                          and now - last_log_growth > FREEZE_STALL):
+                        capture_freeze_state(
+                            os.path.join(self.tempdir, "qemu.monitor"),
+                            self.kernelPath, self.architecture, self.endiannes,
+                            logPath, now - start_time)
+                        freeze_captured = True
+
                 time.sleep(0.5)
         finally:
             stop_event.set()
