@@ -440,19 +440,19 @@ def createRawImg(path: str, size: int) -> str:
             capture_output=True,
         )
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to create partition table for raw image {path}: {e}")
+        raise RuntimeError(f"Failed to create partition table for raw image {path}: {e}\n{e.stderr}")
 
     # Add an ext2 filesystem at the same offset
     try:
         subprocess.run(
-            ["mke2fs", "-E", f"root_owner=1000:1000,offset={_PARTITION_OFFSET}", path],
+            ["mke2fs", "-F", "-E", f"root_owner=1000:1000,offset={_PARTITION_OFFSET}", path],
             text=True,
             check=True,
             capture_output=True,
             stdin=subprocess.DEVNULL
         )
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to create ext2 filesystem on raw image {path}: {e}")
+        raise RuntimeError(f"Failed to create ext2 filesystem on raw image {path}: {e}\n{e.stderr}")
     
     return path
 
