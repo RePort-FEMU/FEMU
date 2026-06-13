@@ -67,11 +67,13 @@ def resolveGuestPath(imagePath: str, path: str) -> str:
     
     while os.path.islink(path):
         linkTarget = os.readlink(path)
-        # If linkTarget is relative, it should be resolved against the current path
-        if not os.path.isabs(linkTarget):
-            linkTarget = os.path.join(os.path.dirname(path), linkTarget)
-        
-        path = guestToHostPath(imagePath, linkTarget)
+        if os.path.isabs(linkTarget):
+            # Guest-absolute target → translate to the corresponding host path.
+            path = guestToHostPath(imagePath, linkTarget)
+        else:
+            # Relative target resolves against the link's own (host) directory.
+            # It is already a host path, so do NOT translate again — doing so
+            path = os.path.normpath(os.path.join(os.path.dirname(path), linkTarget))
 
     return path
 
