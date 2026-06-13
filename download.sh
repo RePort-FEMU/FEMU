@@ -7,8 +7,22 @@ set -e
 DEST="${1:-./binaries}"
 mkdir -p "$DEST"
 
+# Usage: download <url> [output-filename]
 download(){
- wget -N --continue -P"$DEST" "$@"
+ if [ -n "$2" ]; then
+  wget --continue -O "$DEST/$2" "$1"
+ else
+  wget -N --continue -P"$DEST" "$1"
+ fi
+}
+
+# Usage: download_kernel <url> <member-in-tarball> <output-filename>
+# Downloads a .tar.gz, extracts the named member, and saves it as output-filename.
+download_kernel(){
+ tmp=$(mktemp)
+ wget --continue -O "$tmp" "$1"
+ tar xzf "$tmp" -O "$2" > "$DEST/$3"
+ rm -f "$tmp"
 }
 
 echo "Downloading binaries..."
@@ -18,12 +32,12 @@ download https://github.com/pr0v3rbs/FirmAE_kernel-v2.6/releases/download/v1.0/v
 download https://github.com/pr0v3rbs/FirmAE_kernel-v2.6/releases/download/v1.0/vmlinux.mipseb.2
 
 echo "Downloading kernel 4.1 (MIPS)..."
-download https://github.com/pr0v3rbs/FirmAE_kernel-v4.1/releases/download/v1.0/vmlinux.mipsel.4
-download https://github.com/pr0v3rbs/FirmAE_kernel-v4.1/releases/download/v1.0/vmlinux.mipseb.4
+download_kernel https://github.com/RePort-FEMU/FEMU_kernel-v4.1/releases/download/0.1/kernel-mipsel.tar.gz vmlinux vmlinux.mipsel.4
+download_kernel https://github.com/RePort-FEMU/FEMU_kernel-v4.1/releases/download/0.1/kernel-mipseb.tar.gz vmlinux vmlinux.mipseb.4
 
 echo "Downloading kernel 4.1 (ARM)..."
-download https://github.com/pr0v3rbs/FirmAE_kernel-v4.1/releases/download/v1.0/zImage.armel
-download https://github.com/pr0v3rbs/FirmAE_kernel-v4.1/releases/download/v1.0/vmlinux.armel
+download_kernel https://github.com/RePort-FEMU/FEMU_kernel-v4.1/releases/download/0.1/kernel-armel-zImage.tar.gz zImage zImage.armel
+download_kernel https://github.com/RePort-FEMU/FEMU_kernel-v4.1/releases/download/0.1/kernel-armel-vmlinux.tar.gz vmlinux vmlinux.armel
 
 echo "Downloading busybox..."
 download https://github.com/pr0v3rbs/FirmAE/releases/download/v1.0/busybox.armel
