@@ -72,7 +72,8 @@ def validateInits(rootPath: str, suspectedInits: list[str]) -> list[str]:
     if existsInGuest(rootPath, "/init") and not isDirInGuest(rootPath, "/init"):
         possibleInits.append(hostToGuestPath(rootPath, "/init"))
 
-    for possibleInit in ["rcS", "preinit", "preinitMT"]:
+    # FirmAE diff: Added rc and init for asus firmwares
+    for possibleInit in ["rcS", "preinit", "preinitMT", "init", "rc"]:
         results = find(rootPath, possibleInit)
         for result in results:
             possibleInits.append(hostToGuestPath(rootPath, result))
