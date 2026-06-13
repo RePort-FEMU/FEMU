@@ -141,12 +141,16 @@ def _disassemble(monitor_path: str, addr: int, count: int = 8) -> str:
 def capture_freeze_state(monitor_path: str, kernel_path: str,
                          arch: Architecture, endianness: Endianess,
                          log_path: str, elapsed: float,
-                         samples: int = 6, interval: float = 0.5) -> None:
+                         samples: int = 6, interval: float = 0.5) -> bool:
     """
     The guest's serial output has stalled while QEMU is still alive. Sample the
     guest CPU over the monitor, resolve the program counter against the kernel
     symbol table, classify idle-vs-spin, and write a sidecar
     '<log>.freeze.txt' report next to the serial log.
+
+    Returns True if the CPU was IDLE/blocked on every sample, False if it was
+    BUSY/spinning in kernel code (the retry-worthy freeze, e.g. the kretprobe
+    breakpoint loop).
     """
     out_path = log_path + ".freeze.txt"
     rows: list[tuple[dict, str]] = []
@@ -227,3 +231,5 @@ def capture_freeze_state(monitor_path: str, kernel_path: str,
             f"{out_path} (verdict: {'IDLE/blocked' if blocked else 'BUSY/spin'})")
     except Exception as e:
         logger.warning(f"Failed to write freeze diagnostic: {e}")
+
+    return blocked

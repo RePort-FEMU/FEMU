@@ -9,7 +9,7 @@ import urllib.error
 from typing import Optional
 
 from collections.abc import Callable
-from .common import NetworkResult
+from .common import NetworkResult, FREEZE_RETRIES
 
 logger = logging.getLogger(__name__)
 
@@ -97,13 +97,26 @@ def verifyEmulation(
 
     logger.info(f"Verify run: targets={checkIps}, ping={'yes' if checkPing else 'no'}, "
                 f"ports={portsToCheck}, timeout={VERIFY_TIMEOUT}s")
-    try:
-        runQemu(initArg, verifyLog,
-                networkResult=networkResult,
-                timeout=VERIFY_TIMEOUT + CHECK_INTERVAL,
-                on_line=onLine)
-    except subprocess.TimeoutExpired:
-        logger.warning("Verify QEMU hard timeout — treating as not reachable")
+    # Retry on a BUSY/spin freeze (same race as the probe). Reset the per-attempt
+    # boot timing each try; the reachability flags persist so a hit on any attempt
+    # still counts. Non-final attempts stop early on a freeze; the last attempt
+    # runs the full timeout regardless.
+    for attempt in range(FREEZE_RETRIES + 1):
+        is_last = attempt == FREEZE_RETRIES
+        startTime = time.monotonic()
+        lastCheck = 0.0
+        froze = False
+        try:
+            froze = runQemu(initArg, verifyLog,
+                            networkResult=networkResult,
+                            timeout=VERIFY_TIMEOUT + CHECK_INTERVAL,
+                            on_line=onLine,
+                            stop_on_freeze=not is_last)
+        except subprocess.TimeoutExpired:
+            logger.warning("Verify QEMU hard timeout — treating as not reachable")
+        if serviceReachable[0] or not froze:
+            break
+        logger.warning(f"Verify wedged (BUSY/spin freeze) — retry {attempt + 1}/{FREEZE_RETRIES}")
 
     logger.info(f"Verify result: ping={pingReachable[0]} service={serviceReachable[0]} "
                 f"responseTime={serviceResponseTime[0]}s")

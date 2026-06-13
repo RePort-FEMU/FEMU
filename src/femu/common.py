@@ -1,6 +1,12 @@
 from enum import Enum
 from dataclasses import dataclass, field
 
+# Extra QEMU attempts when a guest hits a BUSY/spin freeze (e.g. the kretprobe
+# loop). It's a race, so a fresh boot often clears it. Non-final attempts stop
+# early on a freeze; the final attempt runs the full timeout regardless.
+FREEZE_RETRIES = 2
+
+
 class Architecture(Enum):
     MIPS= ("MIPS", "mips")
     MIPS64 = ("MIPS64","mips64")

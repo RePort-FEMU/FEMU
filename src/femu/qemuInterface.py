@@ -285,7 +285,8 @@ class Qemu:
     def run(self, initArg: str, logPath: str = "", timeout: int = 300,
             on_line: Callable[[str | None], bool] | None = None,
             networkResult: NetworkResult | None = None,
-            capture_freeze: bool = True) -> None:
+            capture_freeze: bool = True,
+            stop_on_freeze: bool = False) -> bool:
         """
         Run the QEMU emulator.
 
@@ -297,6 +298,12 @@ class Qemu:
         capture_freeze      →  if the guest's serial output stalls while QEMU is
                                still alive, snapshot the guest CPU and write a
                                '<log>.freeze.txt' diagnostic (idle/blocked vs spin).
+        stop_on_freeze      →  when a BUSY/spin freeze is captured (e.g. the
+                               kretprobe loop), quit QEMU early instead of waiting
+                               out the timeout, so the caller can retry quickly.
+
+        Returns True if the run was stopped early due to a BUSY/spin freeze,
+        False otherwise (normal exit, panic, or idle stall).
         """
         if not logPath:
             logPath = os.path.join(self.workDir, "qemu.serial.log")
@@ -341,6 +348,7 @@ class Qemu:
 
         try:
             deadline = time.monotonic() + timeout
+            froze           = False
             freeze_captured = False
             last_log_size   = 0
             last_log_growth = time.monotonic()
@@ -368,11 +376,19 @@ class Qemu:
                     elif (size > FREEZE_MIN_BYTES
                           and now - start_time > FREEZE_MIN_BOOT
                           and now - last_log_growth > FREEZE_STALL):
-                        capture_freeze_state(
+                        blocked = capture_freeze_state(
                             os.path.join(self.tempdir, "qemu.monitor"),
                             self.kernelPath, self.architecture, self.endiannes,
                             logPath, now - start_time)
                         freeze_captured = True
+                        if stop_on_freeze and not blocked:
+                            logger.warning("BUSY/spin freeze detected — stopping QEMU "
+                                           "early so the caller can retry.")
+                            froze = True
+                            early_stopped = True
+                            self._sendMonitorCommand("quit")
+                            quit_sent = True
+                            break
 
                 time.sleep(0.5)
         finally:
@@ -399,3 +415,5 @@ class Qemu:
             if stderr_out:
                 logger.error(f"QEMU stderr:\n{stderr_out}")
             raise subprocess.CalledProcessError(process.returncode, cmd)
+
+        return froze

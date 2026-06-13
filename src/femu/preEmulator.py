@@ -8,7 +8,7 @@ from typing import Optional
 
 from .util import mountedImage
 from .guestUtils import hostToGuestPath, guestToHostPath, readGuestLink
-from .common import Endianess, Architecture, NetworkResult, ProbeResult
+from .common import Endianess, Architecture, NetworkResult, ProbeResult, FREEZE_RETRIES
 from .qemuInterface import Qemu
 from .kernelLogUtils import findBridges, findInterfaceIps, findPorts, findMacChanges, findVLANs
 from .emulationVerifier import verifyEmulation
@@ -418,10 +418,21 @@ class PreEmulator:
                 f"qemu.{init[1:].replace('/', '-')}.serial.log",
             )
             logger.info(f"Running probe QEMU with initarg: {initArg}")
-            try:
-                self.qemu.run(initArg, probeLog, timeout=TIMEOUT)
-            except subprocess.TimeoutExpired:
-                logger.info(f"Probe timed out after {TIMEOUT}s")
+            # Retry on a BUSY/spin freeze (a race — a fresh boot often clears it).
+            # Non-final attempts stop early on a freeze; the last attempt lets the
+            # guest run the full TIMEOUT regardless, in case it makes progress.
+            for attempt in range(FREEZE_RETRIES + 1):
+                is_last = attempt == FREEZE_RETRIES
+                try:
+                    froze = self.qemu.run(initArg, probeLog, timeout=TIMEOUT,
+                                          stop_on_freeze=not is_last)
+                except subprocess.TimeoutExpired:
+                    logger.info(f"Probe timed out after {TIMEOUT}s")
+                    froze = False
+                if not froze:
+                    break
+                logger.warning(f"Probe wedged (BUSY/spin freeze) — "
+                               f"retry {attempt + 1}/{FREEZE_RETRIES}")
 
             inferNvramDefaults(self.imagePath, self.mountPoint, probeLog, self.workDir)
 
