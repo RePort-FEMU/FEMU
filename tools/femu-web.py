@@ -144,7 +144,9 @@ def scan() -> list[dict]:
 
 @app.route("/")
 def index():
-    return HTML
+    resp = Response(HTML, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    return resp
 
 @app.route("/api/data")
 def api_data():
