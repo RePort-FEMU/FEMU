@@ -149,7 +149,30 @@ def classifyNetwork(candidates: list, ports: list) -> NetworkResult:
         [("192.168.0.1", "eth0", "br0", [], [])],
         ports, False, ["192.168.0.2"],
     )
+    
+# ---------------------------------------------------------------------------
+# Injection Utils
+# ---------------------------------------------------------------------------
 
+def injectFile(filePath: str, before: str = "", after: str = "") -> str:
+    """
+    Wrap the file's content as `before + content + after` and return the
+    result. With no `before`, `after` is appended in place; otherwise the
+    whole file is rewritten.
+    """
+    try:
+        with open(filePath, "r", errors="replace") as f:
+            content = f.read()
+        if before:
+            with open(filePath, "w") as f:
+                f.write(before + content + after)
+        else:
+            with open(filePath, "a") as f:
+                f.write(after)
+    except Exception as e:
+        logger.error(f"Failed to inject into {filePath}: {e}")
+        raise
+    return before + content + after
 
 # ---------------------------------------------------------------------------
 # PreEmulator
@@ -190,54 +213,36 @@ class PreEmulator:
             raise FileNotFoundError(f"File {init} not found")
         return res.stdout.strip()
 
-    def _wrappingInjection(self, filePath: str, extraContent: str = "") -> str:
-        """Inject content into a script file, preserving the original content."""
-        preInjection = "#!/bin/sh\n"
-        preInjection += "\n# Injected by PreEmulator\n"
-        preInjection += "/firmadyne/preInit.sh\n"
-        if extraContent:
-            preInjection += extraContent
-        preInjection += "/firmadyne/network.sh &\n"
-        if self.servicesFound:
-            preInjection += "/firmadyne/run_service.sh &\n"
-        preInjection += "/firmadyne/debug.sh &\n"
-        preInjection += "\n# End of injection\n"
+    def injectedHelpers(self, withService: bool = True) -> str:
+        """Background helper launches shared by the injection variants."""
+        lines = "/firmadyne/network.sh &\n"
+        if withService and self.servicesFound:
+            lines += "/firmadyne/run_service.sh &\n"
+        lines += "/firmadyne/debug.sh &\n"
+        return lines
 
-        postInjection = "\n# Post-injection content\n"
-        postInjection += "\n/firmadyne/busybox sleep 36000\n"
+    def _preInitInjection(self, filePath: str) -> str:
+        """Cold-launch fallback (init=/firmadyne/preInit.sh): append helpers + run_service.sh, then idle."""
+        injection = ("\n# Injected by PreEmulator\n"
+                     + self.injectedHelpers()
+                     + "/firmadyne/busybox sleep 36000\n")
+        return injectFile(filePath, after=injection)
 
-        try:
-            with open(filePath, "r", errors="replace") as f:
-                content = f.read()
-            with open(filePath, "w") as f:
-                f.write(preInjection + content + postInjection)
-        except Exception as e:
-            logger.error(f"Failed to inject into script {filePath}: {e}")
-            raise
-
-        return preInjection + content + postInjection
+    def _scriptInitInjection(self, filePath: str) -> str:
+        """Script init: run preInit.sh + helpers, then the original script, then idle."""
+        before = ("#!/bin/sh\n\n# Injected by PreEmulator\n/firmadyne/preInit.sh\n"
+                  + self.injectedHelpers()
+                  + "\n# End of injection\n")
+        after = "\n# Post-injection content\n\n/firmadyne/busybox sleep 36000\n"
+        return injectFile(filePath, before=before, after=after)
     
-    def _appendingInjection(self, filePath: str, extraContent: str = "") -> str:
-        """Inject content by appending to the end of the file."""
-        injection = "\n# Injected by PreEmulator\n"
-        if extraContent:
-            injection += extraContent
-        injection += "/firmadyne/network.sh &\n"
-        if self.servicesFound:
-            injection += "/firmadyne/run_service.sh &\n"
-        injection += "/firmadyne/debug.sh &\n"
-        injection += "/firmadyne/busybox sleep 36000\n"
-
-        try:
-            with open(filePath, "r", errors="replace") as f:
-                content = f.read()
-            with open(filePath, "a") as f:
-                f.write(injection)
-        except Exception as e:
-            logger.error(f"Failed to inject into {filePath}: {e}")
-            raise
-
-        return content + injection
+    def _nativeInitInjection(self, filePath: str, init: str) -> str:
+        """Binary init: setup network and hand over PID 1 to the init."""
+        # Many Linksys devices require init to have PID 1 to work
+        injection = ("\n# Injected by PreEmulator\n"
+                     + self.injectedHelpers(withService=False) # Dont force the service up as it may break init
+                     + f"exec {init}\n")
+        return injectFile(filePath, after=injection)
 
     def injectInit(self, init: str) -> tuple[str, str]:
         """Inject firmadyne scripts into the init and return the kernel init argument and injection content."""
@@ -251,35 +256,19 @@ class PreEmulator:
         if os.path.basename(init) == "preInit.sh":
             self.backupFile = init
             self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
-            injection = self._appendingInjection(guestToHostPath(self.mountPoint, init))
+            injection = self._preInitInjection(guestToHostPath(self.mountPoint, init))
             initArg = f"init={init}"
         else:
-            # FIRMAE diff
-            # TODO: Check if this can work
-            # If the init is a symlink try to dereference it
-            dereferencedInit = init
-            visited: set[str] = {init}
-            while os.path.islink(guestToHostPath(self.mountPoint, dereferencedInit)):
-                resolved = readGuestLink(dereferencedInit, self.mountPoint, translateToHost=False)
-                if resolved in visited:
-                    logger.warning(f"Circular symlink detected at {dereferencedInit} → {resolved}, stopping")
-                    break
-                visited.add(resolved)
-                dereferencedInit = resolved
-            
-            if dereferencedInit != init and os.path.isfile(guestToHostPath(self.mountPoint, dereferencedInit)):
-                logger.debug(f"Init {init} is a symlink to {dereferencedInit} (type: {self.getInitType(guestToHostPath(self.mountPoint, dereferencedInit))})")
-            
             # TODO: improve script detection
             if "ELF" not in initType and "symbolic link" not in initType: # script init
                 self.backupFile = init
                 self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
-                injection = self._wrappingInjection(guestToHostPath(self.mountPoint, init))
-                initArg = f"init={init}" 
-            elif "ELF" in initType or "symbolic link" in initType: # netgear R6200 
+                injection = self._scriptInitInjection(guestToHostPath(self.mountPoint, init))
+                initArg = f"init={init}"
+            elif "ELF" in initType or "symbolic link" in initType: # binary/symlinked native init (e.g. /sbin/init -> rc or -> busybox)
                 self.backupFile = "/firmadyne/preInit.sh"
                 self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
-                injection = self._appendingInjection(guestToHostPath(self.mountPoint, self.backupFile), f"exec {init} &\n")
+                injection = self._nativeInitInjection(guestToHostPath(self.mountPoint, self.backupFile), init)
                 initArg = "init=/firmadyne/preInit.sh"
 
         # FIRMAE diff: Firmae only used init= for binaries. We use it for everything
