@@ -155,6 +155,9 @@ class Qemu:
             seen: set[int] = set()
             if networkResult:
                 for port, proto in networkResult.ports:
+                    if port == 0:
+                        continue # Port 0 is not a real port
+                    
                     if port not in seen:
                         portfwd += f",hostfwd={proto}::{port}-:{port}"
                         seen.add(port)
