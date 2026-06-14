@@ -25,7 +25,7 @@ def findPorts(kernelLog:list[str]) -> list[tuple[int, str]]:
         if match:
             port = int(match.group(2))
             proto = "tcp" if match.group(1) == "STREAM" else "udp"
-            if port not in portFound[proto]:
+            if port != 0 and port not in portFound[proto]:
                 ports.append((port, proto))
                 portFound[proto][port] = True
                 
