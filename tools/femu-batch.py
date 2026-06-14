@@ -4,12 +4,17 @@ Run FEMU in parallel Docker containers, one per firmware file.
 
 Usage:
     python femu-batch.py -i ./firmwares -o ./output -j 4 -m check
+
+Resume a previous run, skipping firmwares that already fully succeeded and
+re-running the failed / partially-successful ones:
+    python femu-batch.py -i ./firmwares -o ./output -j 4 -m check --resume
 """
 
 import argparse
 import concurrent.futures
 import json
 import os
+import shutil
 import subprocess
 import sys
 import uuid
@@ -33,8 +38,38 @@ def _abbrev(stage: str) -> str:
     return stage[:4]
 
 
+def _read_findings(fw_output: Path) -> dict | None:
+    """Return the parsed findings.json for a firmware output dir, or None if absent/unreadable."""
+    for findings_path in fw_output.glob("workDir/*/findings.json"):
+        try:
+            with open(findings_path) as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+
+def existing_result(firmware: Path, output_dir: Path, subdir: Path) -> dict | None:
+    """Build a result dict from a previous run's findings, or None if there is no prior run."""
+    fw_output = output_dir / subdir / firmware.stem
+    findings = _read_findings(fw_output)
+    if findings is None:
+        return None
+    return {
+        "firmware": str(subdir / firmware.name),
+        "output_dir": str(fw_output),
+        "stage": findings.get("stage", "unknown"),
+        "findings": findings,
+        "skipped": True,
+    }
+
+
 def run_single(firmware: Path, output_dir: Path, subdir: Path, image: str, mode: str, extra: list[str]) -> dict:
     fw_output = output_dir / subdir / firmware.stem
+    # Start each (re-)run from a clean slate so stale artifacts from a previous
+    # failed/partial attempt can't be mistaken for this run's results.
+    if fw_output.exists():
+        shutil.rmtree(fw_output, ignore_errors=True)
     fw_output.mkdir(parents=True, exist_ok=True)
 
     container_name = f"femu-{firmware.stem}-{uuid.uuid4().hex[:8]}"
@@ -73,15 +108,10 @@ def run_single(firmware: Path, output_dir: Path, subdir: Path, image: str, mode:
         result["stage"] = f"error: {e}"
         return result
 
-    for findings_path in fw_output.glob("workDir/*/findings.json"):
-        try:
-            with open(findings_path) as f:
-                findings = json.load(f)
-            result["stage"] = findings.get("stage", "unknown")
-            result["findings"] = findings
-        except Exception:
-            pass
-        break
+    findings = _read_findings(fw_output)
+    if findings is not None:
+        result["stage"] = findings.get("stage", "unknown")
+        result["findings"] = findings
 
     return result
 
@@ -93,6 +123,9 @@ def main():
     parser.add_argument("-j", "--jobs",   type=int, default=4, help="Max parallel containers")
     parser.add_argument("-m", "--mode",   default="check",    help="FEMU mode (default: check)")
     parser.add_argument("--image",        default="femu",     help="Docker image (default: femu)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Reuse an existing output directory: skip firmwares that already "
+                             "reached stage 'success' and re-run the failed/partial ones.")
     parser.add_argument("extra", nargs=argparse.REMAINDER,    help="Extra args forwarded to femu")
     args = parser.parse_args()
 
@@ -121,15 +154,38 @@ def main():
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Running {len(firmware_files)} firmware(s) with {args.jobs} parallel containers...\n")
+    # In --resume mode, partition firmwares into already-successful (skip) and
+    # to-be-(re)run (no prior run, or a prior failed/partial run).
+    skipped_results: list[dict] = []
+    to_run: list[tuple[Path, Path]] = []
+    for fw, subdir in firmware_files:
+        if args.resume:
+            prev = existing_result(fw, output_dir, subdir)
+            if prev is not None and prev["stage"] == "success":
+                skipped_results.append(prev)
+                continue
+        to_run.append((fw, subdir))
 
-    results = []
-    stage_counts: dict[str, int] = {}
     total_fw = len(firmware_files)
+    if args.resume:
+        print(f"Resume: {total_fw} firmware(s) — skipping {len(skipped_results)} already-successful, "
+              f"(re-)running {len(to_run)} with {args.jobs} parallel containers...\n")
+    else:
+        print(f"Running {total_fw} firmware(s) with {args.jobs} parallel containers...\n")
+
+    # Seed results and the live stage counters with the skipped successes.
+    results: list[dict] = list(skipped_results)
+    stage_counts: dict[str, int] = {}
+    for r in skipped_results:
+        ab = _abbrev(r["stage"])
+        stage_counts[ab] = stage_counts.get(ab, 0) + 1
+    for r in skipped_results:
+        print(f"  [{'skip:'+r['stage']:20s}]  {r['firmware']:70s}  (cached)  [{len(results)}/{total_fw}]")
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futures = {
             pool.submit(run_single, fw, output_dir, subdir, args.image, args.mode, extra): (fw, subdir)
-            for fw, subdir in firmware_files
+            for fw, subdir in to_run
         }
         for future in concurrent.futures.as_completed(futures):
             fw, subdir = futures[future]
@@ -151,6 +207,8 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"Done:  {total} firmware(s)  |  success: {success}  |  failed: {total - success}")
+    if args.resume:
+        print(f"       ({len(skipped_results)} skipped as already-successful, {len(to_run)} (re-)run)")
 
     summary_path = output_dir / "summary.json"
     with open(summary_path, "w") as f:
