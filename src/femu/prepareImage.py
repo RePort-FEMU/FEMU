@@ -317,7 +317,7 @@ def populateEtc(rootPath: str) -> None:
             os.makedirs(parentPath, exist_ok=True)
             with open(fullPath, "w") as f:
                 f.write(content)
-                logger.debug(f"Created essential file: {fullPath}")  
+            logger.debug(f"Created essential file: {fullPath}")  
                 
 def _mknod(path: str, nodeType: int, perms: int, major: int, minor: int) -> None:
     """Create a device node, falling back to sudo if the process lacks CAP_MKNOD."""

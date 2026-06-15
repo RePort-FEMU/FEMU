@@ -247,8 +247,14 @@ def readGuestLink(path: str, imagePath: str, translateToHost: bool = True) -> st
         guestPath = path if path.startswith("/") else "/" + path
 
     resolved = "/"
-    for part in guestPath.strip("/").split("/"):
-        if not part or part == ".":
+    # Components still to process. Symlink targets are expanded *back* onto this
+    # queue so that any symlinked component they introduce is itself resolved
+    # (e.g. /etc/passwd -> default/passwd where /etc/default -> /tmp/default).
+    pending = [p for p in guestPath.strip("/").split("/") if p and p != "."]
+    maxHops = 40  # guard against symlink cycles
+    while pending:
+        part = pending.pop(0)
+        if part == ".":
             continue
         if part == "..":
             resolved = os.path.dirname(resolved) or "/"
@@ -258,10 +264,19 @@ def readGuestLink(path: str, imagePath: str, translateToHost: bool = True) -> st
         hostCandidate = guestToHostPath(imagePath, candidate)
 
         if os.path.islink(hostCandidate):
+            maxHops -= 1
+            if maxHops < 0:
+                logger.warning(f"Too many symlink hops resolving {path}; stopping at {candidate}")
+                resolved = candidate
+                break
             target = os.readlink(hostCandidate)
-            resolved = os.path.normpath(
-                target if os.path.isabs(target) else os.path.join(resolved, target)
-            )
+            targetParts = [p for p in target.split("/") if p and p != "."]
+            if os.path.isabs(target):
+                # Guest-absolute target: restart from the guest root.
+                resolved = "/"
+            # Relative target resolves against the link's own directory, which is
+            # the current `resolved`; leave it unchanged and re-queue the target.
+            pending = targetParts + pending
         else:
             resolved = candidate
 
