@@ -8,6 +8,10 @@ Usage:
 Resume a previous run, skipping firmwares that already fully succeeded and
 re-running the failed / partially-successful ones:
     python femu-batch.py -i ./firmwares -o ./output -j 4 -m check --resume
+
+Resume only the firmwares that stopped at a specific stage (e.g. re-run just the
+ones whose previous run ended at 'preparation_failed'), skipping everything else:
+    python femu-batch.py -i ./firmwares -o ./output --resume-stage preparation_failed
 """
 
 import argparse
@@ -126,10 +130,26 @@ def main():
     parser.add_argument("--resume", action="store_true",
                         help="Reuse an existing output directory: skip firmwares that already "
                              "reached stage 'success' and re-run the failed/partial ones.")
+    parser.add_argument("--resume-stage", metavar="STAGE", action="append",
+                        help="Like --resume, but only (re-)run firmwares whose previous run ended "
+                             "at one of the given stages (e.g. 'preparation_failed'); every other "
+                             "firmware is skipped. Repeat the flag or pass a comma-separated list "
+                             "to target multiple stages. Implies --resume.")
     parser.add_argument("extra", nargs=argparse.REMAINDER,    help="Extra args forwarded to femu")
     args = parser.parse_args()
 
     extra = [a for a in args.extra if a != "--"]
+
+    # --resume-stage implies --resume and narrows the re-run set to the given stages.
+    target_stages: set[str] | None = None
+    if args.resume_stage:
+        target_stages = {
+            stage.strip()
+            for entry in args.resume_stage
+            for stage in entry.split(",")
+            if stage.strip()
+        }
+        args.resume = True
 
     input_dir  = Path(args.input)
     output_dir = Path(args.output)
@@ -154,20 +174,33 @@ def main():
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # In --resume mode, partition firmwares into already-successful (skip) and
-    # to-be-(re)run (no prior run, or a prior failed/partial run).
+    # In --resume mode, partition firmwares into skipped (kept from the prior run)
+    # and to-be-(re)run. Without --resume-stage, anything that didn't reach
+    # 'success' is re-run; with --resume-stage, only firmwares whose prior run
+    # ended at one of the target stages is re-run and everything else is skipped.
     skipped_results: list[dict] = []
     to_run: list[tuple[Path, Path]] = []
     for fw, subdir in firmware_files:
         if args.resume:
             prev = existing_result(fw, output_dir, subdir)
+            if target_stages is not None:
+                if prev is not None and prev["stage"] in target_stages:
+                    to_run.append((fw, subdir))
+                elif prev is not None:
+                    skipped_results.append(prev)
+                # No prior run and a stage filter is set → nothing to target; skip it.
+                continue
             if prev is not None and prev["stage"] == "success":
                 skipped_results.append(prev)
                 continue
         to_run.append((fw, subdir))
 
     total_fw = len(firmware_files)
-    if args.resume:
+    if target_stages is not None:
+        print(f"Resume (stages: {', '.join(sorted(target_stages))}): {total_fw} firmware(s) — "
+              f"skipping {len(skipped_results)}, (re-)running {len(to_run)} matching firmware(s) "
+              f"with {args.jobs} parallel containers...\n")
+    elif args.resume:
         print(f"Resume: {total_fw} firmware(s) — skipping {len(skipped_results)} already-successful, "
               f"(re-)running {len(to_run)} with {args.jobs} parallel containers...\n")
     else:
@@ -207,7 +240,10 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"Done:  {total} firmware(s)  |  success: {success}  |  failed: {total - success}")
-    if args.resume:
+    if target_stages is not None:
+        print(f"       ({len(skipped_results)} skipped, {len(to_run)} (re-)run "
+              f"matching stages: {', '.join(sorted(target_stages))})")
+    elif args.resume:
         print(f"       ({len(skipped_results)} skipped as already-successful, {len(to_run)} (re-)run)")
 
     summary_path = output_dir / "summary.json"
