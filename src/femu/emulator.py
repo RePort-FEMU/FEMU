@@ -291,6 +291,11 @@ class Emulator:
         logger.info(f"Extracting firmware image: {self.config.firmwarePath}")
 
         result = extract(self.config.firmwarePath, self.imagePath, kernel=False)[0]
+        # Check that extraction actually happend
+        if not os.path.exists(str(result["rootfsPath"])):
+            result["status"] = False
+            
+        
         if not result["status"]:
             logger.error(f"Failed to extract filesystem from {self.config.firmwarePath}")
             if self.config.sqlIP and self.db_id:
@@ -321,7 +326,11 @@ class Emulator:
             logger.error("Filesystem path is not set. Cannot infer architecture.")
             return False
 
-        self.architecture, self.endianess = checkArch(self.filesystemPath, self.tag)
+        try:
+            self.architecture, self.endianess = checkArch(self.filesystemPath, self.tag)
+        except Exception:
+            logger.error("Could not infer architecture")
+            return False
 
         if self.architecture == Architecture.UNKNOWN or self.endianess == Endianess.UNKNOWN:
             logger.error("Failed to determine architecture or endianness.")
