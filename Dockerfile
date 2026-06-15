@@ -5,19 +5,24 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 # --- Runtime system packages (rarely change → cached) ---
-RUN apt-get update && apt-get install -y \
+# unrar (RARLAB) lives in Debian's non-free component, so enable it first.
+RUN sed -i 's/Components: main/Components: main non-free/' \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y \
     # QEMU emulators + ROM files (vgabios, efi-e1000, etc.)
     qemu-system-arm qemu-system-mips \
     # Image preparation
     e2fsprogs util-linux fdisk \
     # Network / privilege
     iproute2 sudo iputils-ping \
-    # File type detection
+    # File type detection (libmagic for python-magic)
     file binutils \
     # Archive & filesystem extraction (binwalk runtime deps)
     unzip 7zip squashfs-tools \
     zstd lz4 lzop cpio cabextract \
     liblzma5 \
+    # rar archives + ext/fat filesystem extraction (sleuthkit: tsk_recover/fls/icat)
+    unrar sleuthkit \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /femu
