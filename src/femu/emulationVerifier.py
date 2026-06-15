@@ -21,6 +21,7 @@ _SSL_CTX.verify_mode = ssl.CERT_NONE
 VERIFY_TIMEOUT = 360   # seconds before giving up on a verify run
 BOOT_WAIT      = 10    # minimum seconds before the first connectivity check (mirrors check_emulation.sh sleep 10)
 CHECK_INTERVAL = 5     # seconds between consecutive checks
+HTTP_TIMEOUT   = 5     # per-request timeout for the HTTP service check
 
 
 def verifyEmulation(
@@ -184,19 +185,51 @@ def makeNetworkMonitor(networkResult: NetworkResult) -> "Callable[[str | None], 
 
 
 def _checkHttp(ip: str, port: int) -> bool:
-    """HTTP/HTTPS GET — any response including error codes means the server is up."""
+    """Probe an HTTP/HTTPS port for a live web server.
+
+    A parseable response (including 4xx/5xx) counts as up. Many embedded
+    servers emit malformed HTTP that urllib can't parse (bad status line, early
+    disconnect, non-HTTP banner) — those would otherwise read as "down" even
+    though the device is serving, which is a big source of false negatives vs
+    FirmAE. So when urllib fails for any non-HTTP reason, fall back to a raw
+    request and accept *any* response bytes as proof of life.
+    """
     scheme = "https" if port == 443 else "http"
     try:
         urllib.request.urlopen(
             f"{scheme}://{ip}:{port}/",
-            timeout=2,
+            timeout=HTTP_TIMEOUT,
             context=_SSL_CTX if port == 443 else None,
         )
         return True
     except urllib.error.HTTPError:
         return True   # 4xx/5xx still means the server responded
     except Exception:
+        return _httpRawProbe(ip, port)
+
+
+def _httpRawProbe(ip: str, port: int) -> bool:
+    """Send a minimal GET over a raw socket; return True if the server replies
+    with any bytes. Distinguishes a live-but-quirky server (responds with
+    garbage) from a closed/refused port (no connection, or no data)."""
+    try:
+        sock = socket.create_connection((ip, port), timeout=HTTP_TIMEOUT)
+    except OSError:
+        return False   # port closed / refused / unreachable
+    try:
+        if port == 443:
+            sock = _SSL_CTX.wrap_socket(sock, server_hostname=ip)
+        sock.settimeout(HTTP_TIMEOUT)
+        sock.sendall(b"GET / HTTP/1.0\r\nHost: " + ip.encode() +
+                     b"\r\nConnection: close\r\n\r\n")
+        return len(sock.recv(16)) > 0
+    except OSError:
         return False
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
 
 
 def _checkPing(ip: str) -> bool:
