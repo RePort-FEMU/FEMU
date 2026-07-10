@@ -16,7 +16,7 @@ import socket
 import logging
 import subprocess
 
-from .common import Architecture, Endianess
+from ..common import Architecture, Endianess
 
 logger = logging.getLogger(__name__)
 

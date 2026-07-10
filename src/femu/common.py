@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 # early on a freeze; the final attempt runs the full timeout regardless.
 FREEZE_RETRIES = 2
 
+GIGA = 1024 * 1024 * 1024
+MEGA = 1024 * 1024
+KILO = 1024
 
 class Architecture(Enum):
     MIPS= ("MIPS", "mips")
@@ -39,10 +42,6 @@ class Endianess(Enum):
     
     def identifier(self):
         return self.value[0]
-    
-GIGA = 1024 * 1024 * 1024
-MEGA = 1024 * 1024
-KILO = 1024
 
 @dataclass
 class ProbeResult:

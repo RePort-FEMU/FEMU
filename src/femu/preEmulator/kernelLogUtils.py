@@ -3,7 +3,7 @@ import struct
 import socket
 import logging
 
-from .common import Endianess
+from ..common import Endianess
 
 logger = logging.getLogger(__name__)
 

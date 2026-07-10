@@ -5,8 +5,6 @@ import stat
 import os
 import re
 
-from .util import find, findDirs, strings, findStringInBinFile, mountedImage, runFsck
-
 from .guestUtils import  (
     guestToHostPath, 
     hostToGuestPath, 
@@ -18,7 +16,8 @@ from .guestUtils import  (
     readGuestLink
 )
 
-from .common import Architecture, Endianess
+from ..util import find, findDirs, strings, findStringInBinFile, mountedImage, runFsck
+from ..common import Architecture, Endianess
 
 logger = logging.getLogger(__name__)
 

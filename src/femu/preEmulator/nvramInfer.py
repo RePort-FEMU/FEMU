@@ -2,7 +2,7 @@ import logging
 import os
 import subprocess
 
-from .util import mountedImage
+from ..util import mountedImage
 
 logger = logging.getLogger(__name__)
 

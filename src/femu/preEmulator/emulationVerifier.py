@@ -9,7 +9,7 @@ import urllib.error
 from typing import Optional
 
 from collections.abc import Callable
-from .common import NetworkResult, FREEZE_RETRIES
+from ..common import NetworkResult, FREEZE_RETRIES
 
 logger = logging.getLogger(__name__)
 

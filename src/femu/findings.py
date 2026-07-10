@@ -20,154 +20,192 @@ def getExportDir(workDir: str, tag: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Build / save
+# Findings — accumulate state, then build/export at any point
 # ---------------------------------------------------------------------------
 
-def buildFindings(
-    stage: str,
-    workDir: str,
-    firmwarePath: str,
-    tag: str,
-    brand: str,
-    architecture: Architecture,
-    endianness: Endianess,
-    probeResult: ProbeResult | None = None,
-    kernelPath: str = "",
-    foundServices: dict | None = None,
-    extractionSeconds: float | None = None,
-    preEmulationSeconds: float | None = None,
-) -> dict:
-    findings: dict = {
-        "stage": stage,
-        "firmware": {
-            "path": firmwarePath,
-            "tag": tag,
-            "brand": brand,
-        },
-    }
+class Findings:
+    """Mutable holder for a firmware run's findings.
 
-    if architecture != Architecture.UNKNOWN:
-        findings["emulation"] = {
-            "imagePath": os.path.join(workDir, "raw.img"),
-            "architecture": str(architecture),
-            "endianness": str(endianness),
-            "kernelPath": kernelPath,
-            "initArg": probeResult.initArg if probeResult else "",
-            "workDir": workDir,
-        }
+    Set fields as they become known during emulation, then call ``export()``
+    at any stage to build the JSON, write ``findings.json`` and (if a database
+    is configured) upsert the emulation record. ``build()`` returns the same
+    dict without any side effects.
+    """
 
-    if probeResult:
-        findings["initInjection"] = {
-            "modifiedGuestFile": probeResult.modifiedGuestFile,
-            "injectedContent": probeResult.injectedContent,
-        }
-        nr = probeResult.networkResult
-        findings["network"] = {
-            "networkType": nr.networkType,
-            "netBridge": nr.netBridge,
-            "netInterface": nr.netInterface,
-            "candidates": [
-                {"ip": ip, "interface": iface, "bridge": bridge,
-                 "vlans": vlans, "macs": macs}
-                for ip, iface, bridge, vlans, macs in nr.candidates
-            ],
-            "ports": [
-                {"port": port, "proto": proto}
-                for port, proto in nr.ports
-            ],
-            "isUserNetwork": nr.isUserNetwork,
-            "hostIps": nr.hostIps,
-            "reachability": {
-                "ping": probeResult.pingReachable,
-                "service": probeResult.serviceReachable,
+    def __init__(self, firmwarePath: str, tag: str, brand: str, workDir: str, *,
+                 sqlIP: str | None = None, sqlPort: int = 5432,
+                 dbId: int | None = None) -> None:
+        # Identity / target (set once)
+        self.firmwarePath = firmwarePath
+        self.tag = tag
+        self.brand = brand
+        self.workDir = workDir
+        self.sqlIP = sqlIP
+        self.sqlPort = sqlPort
+        self.dbId = dbId
+
+        # Accumulated state (set as the run progresses)
+        self.stage: str = "unknown"
+        self.architecture: Architecture = Architecture.UNKNOWN
+        self.endianness: Endianess = Endianess.UNKNOWN
+        self.kernelPath: str = ""
+        self.kernelVersion: str = ""
+        self.probeResult: ProbeResult | None = None
+        self.foundServices: dict | None = None
+        self.extractionSeconds: float | None = None
+        self.preparationSeconds: float | None = None
+        self.preEmulationSeconds: float | None = None
+
+    # -- build -------------------------------------------------------------
+
+    def build(self) -> dict:
+        """Assemble the findings dict from whatever has been set so far."""
+        findings: dict = {
+            "stage": self.stage,
+            "firmware": {
+                "path": self.firmwarePath,
+                "tag": self.tag,
+                "brand": self.brand,
             },
         }
 
-    if foundServices is not None:
-        findings["services"] = foundServices
+        if self.architecture != Architecture.UNKNOWN:
+            findings["emulation"] = {
+                "imagePath": os.path.join(self.workDir, "raw.img"),
+                "architecture": str(self.architecture),
+                "endianness": str(self.endianness),
+                "kernelPath": self.kernelPath,
+                "kernelVersion": self.kernelVersion,
+                "initArg": self.probeResult.initArg if self.probeResult else "",
+                "workDir": self.workDir,
+            }
 
-    findings["timings"] = {
-        "extractionSeconds": round(extractionSeconds, 1) if extractionSeconds is not None else None,
-        "preEmulationSeconds": round(preEmulationSeconds, 1) if preEmulationSeconds is not None else None,
-        "serviceResponseSeconds": round(probeResult.serviceResponseTime, 1)
-            if probeResult and probeResult.serviceResponseTime is not None else None,
-    }
+        if self.probeResult:
+            pr = self.probeResult
+            findings["initInjection"] = {
+                "modifiedGuestFile": pr.modifiedGuestFile,
+                "injectedContent": pr.injectedContent,
+            }
+            nr = pr.networkResult
+            findings["network"] = {
+                "networkType": nr.networkType,
+                "netBridge": nr.netBridge,
+                "netInterface": nr.netInterface,
+                "candidates": [
+                    {"ip": ip, "interface": iface, "bridge": bridge,
+                     "vlans": vlans, "macs": macs}
+                    for ip, iface, bridge, vlans, macs in nr.candidates
+                ],
+                "ports": [
+                    {"port": port, "proto": proto}
+                    for port, proto in nr.ports
+                ],
+                "isUserNetwork": nr.isUserNetwork,
+                "hostIps": nr.hostIps,
+                "reachability": {
+                    "ping": pr.pingReachable,
+                    "service": pr.serviceReachable,
+                },
+            }
 
-    return findings
+        if self.foundServices is not None:
+            findings["services"] = self.foundServices
 
+        findings["timings"] = {
+            "extractionSeconds": round(self.extractionSeconds, 1)
+                if self.extractionSeconds is not None else None,
+            "preparationSeconds": round(self.preparationSeconds, 1)
+                if self.preparationSeconds is not None else None,
+            "preEmulationSeconds": round(self.preEmulationSeconds, 1)
+                if self.preEmulationSeconds is not None else None,
+            "serviceResponseSeconds": round(self.probeResult.serviceResponseTime, 1)
+                if self.probeResult and self.probeResult.serviceResponseTime is not None else None,
+        }
 
-def saveFindings(findings: dict, workDir: str) -> None:
-    findingsPath = os.path.join(workDir, "findings.json")
-    with open(findingsPath, "w") as f:
-        json.dump(findings, f, indent=2)
-    logger.info(f"Findings ({findings.get('stage')}) exported to {findingsPath}")
+        return findings
 
+    # -- export ------------------------------------------------------------
 
-def saveFindingsToDB(findings: dict, sqlIP: str | None, sqlPort: int,
-                     dbId: int | None) -> None:
-    if not sqlIP or not dbId:
-        return
-    net = findings.get("network")
-    stage = findings.get("stage", "unknown")
-    reach = (net or {}).get("reachability", {})
+    def export(self, stage: str | None = None) -> dict:
+        """Set ``stage`` (if given), then build, write to disk and DB. Returns the dict."""
+        if stage is not None:
+            self.stage = stage
+        findings = self.build()
+        self._saveToDisk(findings)
+        self._saveToDB(findings)
+        return findings
 
-    try:
-        with DBInterface(sqlIP, sqlPort) as cur:
-            cur.execute("""
-                INSERT INTO emulation
-                    (iid, stage, network_type, net_bridge, net_interface,
-                     is_user_network, init_arg, ping_reachable, service_reachable)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (iid) DO UPDATE SET
-                    stage            = EXCLUDED.stage,
-                    network_type     = EXCLUDED.network_type,
-                    net_bridge       = EXCLUDED.net_bridge,
-                    net_interface    = EXCLUDED.net_interface,
-                    is_user_network  = EXCLUDED.is_user_network,
-                    init_arg         = EXCLUDED.init_arg,
-                    ping_reachable   = EXCLUDED.ping_reachable,
-                    service_reachable= EXCLUDED.service_reachable
-                RETURNING id
-            """, (
-                dbId,
-                stage,
-                net.get("networkType")   if net else None,
-                net.get("netBridge")     if net else None,
-                net.get("netInterface")  if net else None,
-                net.get("isUserNetwork") if net else None,
-                findings.get("emulation", {}).get("initArg"),
-                reach.get("ping",    False),
-                reach.get("service", False),
-            ))
-            row = cur.fetchone()
-            if not row:
-                return
-            emulation_id = row[0]
+    def _saveToDisk(self, findings: dict) -> None:
+        os.makedirs(self.workDir, exist_ok=True)
+        findingsPath = os.path.join(self.workDir, "findings.json")
+        with open(findingsPath, "w") as f:
+            json.dump(findings, f, indent=2)
+        logger.info(f"Findings ({findings.get('stage')}) exported to {findingsPath}")
 
-            if net:
-                cur.execute("DELETE FROM network_candidate WHERE emulation_id = %s", (emulation_id,))
-                for c in net.get("candidates", []):
-                    cur.execute("""
-                        INSERT INTO network_candidate
-                            (emulation_id, ip, interface, bridge, vlans, macs)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (
-                        emulation_id, c["ip"], c["interface"], c["bridge"],
-                        ",".join(str(v) for v in c.get("vlans", [])),
-                        ",".join(str(m) for m in c.get("macs",  [])),
-                    ))
+    def _saveToDB(self, findings: dict) -> None:
+        if not self.sqlIP or not self.dbId:
+            return
+        net = findings.get("network")
+        stage = findings.get("stage", "unknown")
+        reach = (net or {}).get("reachability", {})
 
-                cur.execute("DELETE FROM network_port WHERE emulation_id = %s", (emulation_id,))
-                for p in net.get("ports", []):
-                    cur.execute("""
-                        INSERT INTO network_port (emulation_id, port, proto)
-                        VALUES (%s, %s, %s)
-                    """, (emulation_id, p["port"], p["proto"]))
+        try:
+            with DBInterface(self.sqlIP, self.sqlPort) as cur:
+                cur.execute("""
+                    INSERT INTO emulation
+                        (iid, stage, network_type, net_bridge, net_interface,
+                         is_user_network, init_arg, ping_reachable, service_reachable)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (iid) DO UPDATE SET
+                        stage            = EXCLUDED.stage,
+                        network_type     = EXCLUDED.network_type,
+                        net_bridge       = EXCLUDED.net_bridge,
+                        net_interface    = EXCLUDED.net_interface,
+                        is_user_network  = EXCLUDED.is_user_network,
+                        init_arg         = EXCLUDED.init_arg,
+                        ping_reachable   = EXCLUDED.ping_reachable,
+                        service_reachable= EXCLUDED.service_reachable
+                    RETURNING id
+                """, (
+                    self.dbId,
+                    stage,
+                    net.get("networkType")   if net else None,
+                    net.get("netBridge")     if net else None,
+                    net.get("netInterface")  if net else None,
+                    net.get("isUserNetwork") if net else None,
+                    findings.get("emulation", {}).get("initArg"),
+                    reach.get("ping",    False),
+                    reach.get("service", False),
+                ))
+                row = cur.fetchone()
+                if not row:
+                    return
+                emulation_id = row[0]
 
-            cur.connection.commit()
-            logger.info(f"Emulation findings written to DB (emulation_id={emulation_id})")
-    except Exception as e:
-        logger.warning(f"Failed to export findings to DB: {e}")
+                if net:
+                    cur.execute("DELETE FROM network_candidate WHERE emulation_id = %s", (emulation_id,))
+                    for c in net.get("candidates", []):
+                        cur.execute("""
+                            INSERT INTO network_candidate
+                                (emulation_id, ip, interface, bridge, vlans, macs)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (
+                            emulation_id, c["ip"], c["interface"], c["bridge"],
+                            ",".join(str(v) for v in c.get("vlans", [])),
+                            ",".join(str(m) for m in c.get("macs",  [])),
+                        ))
+
+                    cur.execute("DELETE FROM network_port WHERE emulation_id = %s", (emulation_id,))
+                    for p in net.get("ports", []):
+                        cur.execute("""
+                            INSERT INTO network_port (emulation_id, port, proto)
+                            VALUES (%s, %s, %s)
+                        """, (emulation_id, p["port"], p["proto"]))
+
+                cur.connection.commit()
+                logger.info(f"Emulation findings written to DB (emulation_id={emulation_id})")
+        except Exception as e:
+            logger.warning(f"Failed to export findings to DB: {e}")
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ import os
 from collections.abc import Callable
 
 from .common import Architecture, Endianess, NetworkResult
-from .freezeDiagnostics import (
+from .preEmulator.freezeDiagnostics import (
     capture_freeze_state, FREEZE_MIN_BOOT, FREEZE_STALL, FREEZE_MIN_BYTES,
 )
 
