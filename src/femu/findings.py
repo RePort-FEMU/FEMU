@@ -103,8 +103,13 @@ class Findings:
                 "isUserNetwork": nr.isUserNetwork,
                 "hostIps": nr.hostIps,
                 "reachability": {
-                    "ping": pr.pingReachable,
-                    "service": pr.serviceReachable,
+                    "reachable": pr.reachable,
+                    "webReachable": pr.webReachable,
+                    "checks": [
+                        {"ip": c.ip, "port": c.port, "kind": c.kind,
+                         "reachable": c.reachable, "responseTime": c.responseTime}
+                        for c in pr.checks
+                    ],
                 },
             }
 

@@ -40,6 +40,8 @@ def initFirmadyne(rootPath: str) -> None:
         os.mkdir(os.path.join(rootPath, "firmadyne"))
         os.mkdir(os.path.join(rootPath, "firmadyne", "libnvram"))
         os.mkdir(os.path.join(rootPath, "firmadyne", "libnvram.override"))
+        with open(os.path.join(rootPath, "firmadyne", "network_type"), "w") as f:
+            f.write("None")
     except OSError as e:
         logger.error(f"Failed to create directories: {e}")
         raise RuntimeError(f"Failed to create directories: {e}")  

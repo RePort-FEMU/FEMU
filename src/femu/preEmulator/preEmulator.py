@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Result ranking
+# ---------------------------------------------------------------------------
+
+def _partialScore(result: ProbeResult) -> tuple[int, int]:
+    """Rank reachable-but-not-web results: prefer ones that reached a real TCP
+    service over ping-only, then more reached targets overall."""
+    reached = result.reachedServices
+    services = sum(1 for c in reached if c.kind != "ping")
+    return (services, len(reached))
+
+
+# ---------------------------------------------------------------------------
 # Injection Utils
 # ---------------------------------------------------------------------------
 
@@ -65,8 +77,6 @@ class PreEmulator:
 
         self.mountPoint = mountPoint or tempfile.mkdtemp(prefix="femu-mount-", dir="/tmp")
         self.workDir    = workDir    or tempfile.mkdtemp(prefix="femu-work-",  dir="/tmp")
-
-        self.partialResult: Optional[ProbeResult] = None  # Incase ping-only success after exhausting all inits
 
         self.backupFile: str | None = None
         self.backupData: str | None = None
@@ -236,6 +246,17 @@ class PreEmulator:
             logger.debug(f"Restored original init: {self.backupFile}")
         self.backupFile = None
         self.backupData = None
+        
+    def _restoreImage(self) -> None:
+        """Restore the image to a known clean state."""
+        self._restoreBackupIfNeeded()
+        
+        self._writeNetworkFiles({
+            "network_type":  "None",
+            "net_bridge":    "",
+            "net_interface": "",
+        })
+        
 
     def start(self) -> Optional[ProbeResult]:
         """
@@ -245,11 +266,15 @@ class PreEmulator:
           3. Classify the network from the probe log.
           4. Write final network config files into the image.
           5. Verify run: boot with the classified config and check reachability
-             (ping + TCP ports), mirroring FirmAE's check_emulation.sh.
+             (ping + TCP/HTTP ports), mirroring FirmAE's check_emulation.sh.
           6. Always restores the injected init before returning.
-          7. On success: return ProbeResult. On failure: try the next init.
+          7. Return as soon as an init is web-reachable (full success). Otherwise
+             keep the best reachable-but-not-web result and try the next init,
+             returning that partial at the end (or None if nothing was reachable).
         """
         logger.info(f"Starting pre-emulator for {self.imagePath} with inits {self.possibleInits}")
+
+        bestResult: Optional[ProbeResult] = None
 
         for init in self.possibleInits:
             logger.info(f"Processing init: {init}")
@@ -262,13 +287,6 @@ class PreEmulator:
                 except Exception as e:
                     logger.error(f"Failed to inject init {init}: {e}")
                     continue
-
-            # --- probe: network.sh reads "None" and does nothing ---
-            self._writeNetworkFiles({
-                "network_type":  "None",
-                "net_bridge":    "",
-                "net_interface": "",
-            })
 
             os.makedirs(os.path.join(self.workDir, "kernelLogs"), exist_ok=True)
             probeLog = os.path.join(
@@ -315,26 +333,27 @@ class PreEmulator:
             })
 
             # --- verify reachability (mirrors check_emulation.sh) ---
-            pingReachable, serviceReachable, serviceResponseTime = verifyEmulation(
+            reachable, checks = verifyEmulation(
                 initArg, networkResult, self.workDir, self.qemu.run)
-            self._restoreBackupIfNeeded()
+            self._restoreImage()
 
-            if pingReachable:
-                logger.info(f"Init {init} produced a ping-reachable emulation")
-                self.partialResult = ProbeResult(initArg, networkResult, injectedFile, injectedContent,
-                                                 pingReachable=pingReachable, serviceReachable=serviceReachable,
-                                                 serviceResponseTime=serviceResponseTime)
+            result = ProbeResult(initArg, networkResult, injectedFile, injectedContent,
+                                 reachable=reachable, checks=checks)
 
-            if serviceReachable:
-                return ProbeResult(initArg, networkResult, injectedFile, injectedContent,
-                                   pingReachable=pingReachable, serviceReachable=serviceReachable,
-                                   serviceResponseTime=serviceResponseTime)
+            if result.webReachable:
+                logger.info(f"Init {init} produced a web-reachable emulation (full success)")
+                return result
 
-            logger.warning(f"Init {init} did not produce a reachable device — trying next")
+            if reachable and (bestResult is None or _partialScore(result) > _partialScore(bestResult)):
+                bestResult = result
+                logger.info(f"Init {init} reachable but no web server — keeping as best partial")
 
-        if self.partialResult:
-            logger.warning(f"No init produced a fully reachable emulation, but at least one was ping-reachable. Returning partial result.")
-            return self.partialResult
-        
+            logger.warning(f"Init {init} did not produce a web-reachable device — trying next")
+
+        if bestResult:
+            logger.warning("No init produced a web-reachable emulation; returning best partial "
+                           f"(reached: {[c.label() for c in bestResult.reachedServices]})")
+            return bestResult
+
         logger.error(f"All inits exhausted without producing a reachable emulation")
         return None

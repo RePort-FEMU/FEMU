@@ -387,18 +387,21 @@ class Emulator:
             return
 
         nr = probeResult.networkResult
+        reached = [c.label() for c in probeResult.reachedServices] or ["none"]
         logger.info(
             f"Network ready: type={nr.networkType} "
             f"bridge={nr.netBridge} iface={nr.netInterface} "
             f"userNet={nr.isUserNetwork} "
-            f"ping={probeResult.pingReachable} service={probeResult.serviceReachable}"
+            f"web={probeResult.webReachable} reached={reached}"
         )
         if nr.hostIps:
             logger.info(f"Host IPs: {', '.join(nr.hostIps)}")
 
         logger.info(f"Step 4: exporting findings")
 
-        status = "success" if probeResult.serviceReachable else "partial_success"
+        # Full success only when a web server responds; any other reachable
+        # service (or ping-only) is a partial success.
+        status = "success" if probeResult.webReachable else "partial_success"
 
         self.findings.probeResult = probeResult
         self.findings.kernelPath = pre.getKernelPath()

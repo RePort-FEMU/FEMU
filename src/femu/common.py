@@ -44,15 +44,48 @@ class Endianess(Enum):
         return self.value[0]
 
 @dataclass
+class ServiceCheck:
+    """One reachability probe run during verification, with its outcome."""
+    ip: str
+    port: int | None            # None → ICMP ping (no port)
+    kind: str                   # "ping" | "web" | "tcp"
+    reachable: bool
+    responseTime: float | None = None  # seconds from QEMU start until it responded
+
+    def label(self) -> str:
+        return f"{self.ip}/ping" if self.port is None else f"{self.ip}:{self.port}/{self.kind}"
+
+
+@dataclass
 class ProbeResult:
     """Returned by PreEmulator.start() — everything needed to reproduce the emulation."""
     initArg: str                    # kernel init= / rdinit= argument
     networkResult: "NetworkResult"
     modifiedGuestFile: str | None   # guest path of the injected init file
     injectedContent: str | None     # content appended to that file
-    pingReachable: bool = False     # ICMP ping responded during verify
-    serviceReachable: bool = False  # TCP/HTTP service responded during verify
-    serviceResponseTime: float | None = None  # seconds from QEMU start to first service response
+    reachable: bool = False         # device produced at least one positive signal (or booted but was unverifiable)
+    checks: list = field(default_factory=list)  # list[ServiceCheck] — every probe attempted, reached or not
+
+    @property
+    def webReachable(self) -> bool:
+        """True iff a web server (HTTP/HTTPS) responded — the criterion for full success.
+
+        FirmAE only ever checked the web server; we also probe other TCP ports,
+        but a non-web service responding is a partial (not full) success.
+        """
+        return any(c.reachable and c.kind == "web" for c in self.checks)
+
+    @property
+    def reachedServices(self) -> list:
+        """The checks that responded."""
+        return [c for c in self.checks if c.reachable]
+
+    @property
+    def serviceResponseTime(self) -> float | None:
+        """Seconds from QEMU start to the earliest service that responded, or None."""
+        times = [c.responseTime for c in self.checks
+                 if c.reachable and c.responseTime is not None]
+        return min(times) if times else None
 
 @dataclass
 class NetworkResult:

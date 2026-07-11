@@ -6,106 +6,106 @@ import os
 import ssl
 import urllib.request
 import urllib.error
-from typing import Optional
-
+from typing import NamedTuple, Optional
 from collections.abc import Callable
-from ..common import NetworkResult, FREEZE_RETRIES
+
+from ..common import NetworkResult, ServiceCheck, FREEZE_RETRIES
 
 logger = logging.getLogger(__name__)
 
-# Shared SSL context — firmware devices always use self-signed certs
+# ─────────────────────────── Configuration ───────────────────────────
+
+# Ports treated as a web server: reaching one counts as full success, mirroring
+# FirmAE (which only checked the web UI). Any other TCP port is a partial success.
+_WEB_PORTS = {80, 443, 8080, 8443, 8000, 8888}
+
+# Shared SSL context — firmware devices always use self-signed certs.
 _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
 
 VERIFY_TIMEOUT = 360   # seconds before giving up on a verify run
-BOOT_WAIT      = 10    # minimum seconds before the first connectivity check (mirrors check_emulation.sh sleep 10)
+BOOT_WAIT      = 10    # min seconds before the first check (mirrors check_emulation.sh sleep 10)
 CHECK_INTERVAL = 5     # seconds between consecutive checks
 HTTP_TIMEOUT   = 5     # per-request timeout for the HTTP service check
 
+
+# ──────────────────────────── Public API ─────────────────────────────
 
 def verifyEmulation(
     initArg: str,
     networkResult: NetworkResult,
     workDir: str,
     runQemu: Callable,
-) -> tuple[bool, bool, float | None]:
+) -> tuple[bool, list[ServiceCheck]]:
     """
-    Boot the emulated device with the classified network config and verify reachability.
+    Boot the emulated device and verify reachability. Returns (reachable, checks):
 
-    Returns (pingReachable, serviceReachable, serviceResponseTime):
-        pingReachable       — at least one candidate IP responded to ICMP ping.
-        serviceReachable    — at least one TCP/HTTP service responded (strong confirmation).
-        serviceResponseTime — seconds from QEMU start until service responded, or None.
-    QEMU is stopped as soon as serviceReachable becomes True.
+        reachable — True if the device gave any positive signal, or booted with
+                    nothing to probe (unverifiable).
+        checks    — one ServiceCheck per (ip, port) target plus ping, each flagged
+                    reached/unreached. A web hit is full success (see
+                    ProbeResult.webReachable); any other TCP service is partial.
+
+    QEMU stops as soon as a web service responds; otherwise it runs the full
+    verify window so late-starting services still get recorded.
     """
     verifyLog = os.path.join(workDir, "kernelLogs", "qemu.verify.serial.log")
-    tcpPorts  = [port for port, proto in networkResult.ports if proto == "tcp" and port != 0]
 
-    if networkResult.isUserNetwork:
-        checkIps     = ["127.0.0.1"]
-        checkPing    = False
-        portsToCheck = tcpPorts
-        if not portsToCheck:
+    targets = _resolveTargets(networkResult)
+    if targets is None:
+        if networkResult.isUserNetwork:
             logger.warning("User networking with no detected TCP ports — cannot verify reachability")
-            return False, True, None
-    elif networkResult.candidates:
-        checkIps     = [c[0] for c in networkResult.candidates]
-        checkPing    = True
-        portsToCheck = [80, 443] + [p for p in tcpPorts if p not in (80, 443)]
-    else:
-        logger.warning("No check IP available — skipping verification")
-        return False, True, None
+        else:
+            logger.warning("No check IP available — skipping verification")
+        return True, []
 
-    startTime           = time.monotonic()
-    lastCheck           = 0.0
-    pingReachable       = [False]
-    serviceReachable    = [False]
-    serviceResponseTime: list[Optional[float]] = [None]
+    # Pre-seed every target as unreached; the sweep flips it on the first hit.
+    checks: dict[tuple[str, Optional[int]], ServiceCheck] = {}
+    for ip in targets.ips:
+        if targets.ping:
+            checks[(ip, None)] = ServiceCheck(ip, None, "ping", False)
+        for port in targets.ports:
+            checks[(ip, port)] = ServiceCheck(ip, port, "web" if _isWebPort(port) else "tcp", False)
+
+    def webUp() -> bool:
+        return any(c.reachable and c.kind == "web" for c in checks.values())
+
+    # seen sets mirror "already reachable" and persist across retries, so a hit on
+    # any attempt still counts and is never re-probed.
+    seenPing: set[str] = set()
+    seenPorts: set[tuple[str, int]] = set()
+    clock = _CheckClock()
 
     def onLine(line: str | None) -> bool:
-        nonlocal lastCheck
-        elapsed = time.monotonic() - startTime
-
-        if elapsed < BOOT_WAIT:
-            return False
-        if elapsed > VERIFY_TIMEOUT:
+        if clock.elapsed > VERIFY_TIMEOUT:
             logger.info(f"Verify timed out after {VERIFY_TIMEOUT}s")
             return True
 
-        if line is not None or elapsed - lastCheck < CHECK_INTERVAL:
+        elapsed = clock.due(line)
+        if elapsed is None:
             return False
-        lastCheck = elapsed
 
-        for ip in checkIps:
-            if checkPing and not pingReachable[0] and _checkPing(ip):
-                pingReachable[0] = True
-                logger.info(f"Ping reachable: {ip} — waiting for service confirmation")
+        for kind, ip, port in _probeTargets(targets, seenPing, seenPorts, stopWhenWebUp=True):
+            check = checks[(ip, port)]
+            check.reachable = True
+            check.responseTime = round(elapsed, 1)
+            if kind == "ping":
+                logger.info(f"Ping reachable: {ip}")
+            else:
+                logger.info(f"{'HTTP' if kind == 'web' else 'TCP'} service reachable: {ip}:{port}")
 
-            for port in portsToCheck:
-                ok = _checkHttp(ip, port) if port in (80, 443) else _checkTcp(ip, port)
-                if ok:
-                    proto = "HTTP" if port in (80, 443) else "TCP"
-                    logger.info(f"{proto} service reachable: {ip}:{port}")
-                    serviceReachable[0] = True
-                    serviceResponseTime[0] = round(elapsed, 1)
-                    break
+        # Full success (web) stops the run; partial hits keep it going for more.
+        return webUp()
 
-            if serviceReachable[0]:
-                break
-
-        return serviceReachable[0]
-
-    logger.info(f"Verify run: targets={checkIps}, ping={'yes' if checkPing else 'no'}, "
-                f"ports={portsToCheck}, timeout={VERIFY_TIMEOUT}s")
-    # Retry on a BUSY/spin freeze (same race as the probe). Reset the per-attempt
-    # boot timing each try; the reachability flags persist so a hit on any attempt
-    # still counts. Non-final attempts stop early on a freeze; the last attempt
-    # runs the full timeout regardless.
+    logger.info(f"Verify run: targets={targets.ips}, ping={'yes' if targets.ping else 'no'}, "
+                f"ports={targets.ports}, timeout={VERIFY_TIMEOUT}s")
+    # Retry on a BUSY/spin freeze (same race as the probe). clock.reset() restarts
+    # the per-attempt timing; reachability persists. Non-final attempts stop early
+    # on a freeze; the last runs the full timeout regardless.
     for attempt in range(FREEZE_RETRIES + 1):
         is_last = attempt == FREEZE_RETRIES
-        startTime = time.monotonic()
-        lastCheck = 0.0
+        clock.reset()
         froze = False
         try:
             froze = runQemu(initArg, verifyLog,
@@ -115,91 +115,150 @@ def verifyEmulation(
                             stop_on_freeze=not is_last)
         except subprocess.TimeoutExpired:
             logger.warning("Verify QEMU hard timeout — treating as not reachable")
-        if serviceReachable[0] or not froze:
+        if webUp() or not froze:
             break
         logger.warning(f"Verify wedged (BUSY/spin freeze) — retry {attempt + 1}/{FREEZE_RETRIES}")
 
-    logger.info(f"Verify result: ping={pingReachable[0]} service={serviceReachable[0]} "
-                f"responseTime={serviceResponseTime[0]}s")
-    return pingReachable[0], serviceReachable[0], serviceResponseTime[0]
-
-
-_WEB_PORTS = {80, 443, 8080, 8443, 8000, 8888}
+    checkList = list(checks.values())
+    reachable = any(c.reachable for c in checkList)
+    reached = [c.label() for c in checkList if c.reachable] or ["none"]
+    logger.info(f"Verify result: reachable={reachable} web={webUp()} reached={reached}")
+    return reachable, checkList
 
 
 def makeNetworkMonitor(networkResult: NetworkResult) -> "Callable[[str | None], bool]":
     """
-    Return an on_line callback for Qemu.run() during boot/debug.
-    Continuously checks all detected ports and logs each service the first time
-    it responds. Always returns False — never interrupts QEMU.
+    on_line callback for Qemu.run() during an interactive boot/debug session.
+    Logs each service the first time it responds and never interrupts QEMU
+    (always returns False). Unlike verifyEmulation, it does not stop on success.
     """
-    tcpPorts = [port for port, proto in networkResult.ports if proto == "tcp" and port != 0]
-
-    if networkResult.isUserNetwork:
-        checkIps     = ["127.0.0.1"]
-        checkPing    = False
-        portsToCheck = tcpPorts
-        if not portsToCheck:
-            return lambda _: False
-    elif networkResult.candidates:
-        checkIps     = [c[0] for c in networkResult.candidates]
-        checkPing    = True
-        portsToCheck = [80, 443] + [p for p in tcpPorts if p not in (80, 443)]
-    else:
+    targets = _resolveTargets(networkResult)
+    if targets is None:
         return lambda _: False
 
-    startTime   = time.monotonic()
-    lastCheck   = [0.0]
-    reported: set[tuple] = set()
-    pingReported: set[str] = set()
+    seenPing: set[str] = set()
+    seenPorts: set[tuple[str, int]] = set()
+    clock = _CheckClock()
 
     def onLine(line: str | None) -> bool:
-        elapsed = time.monotonic() - startTime
-        if elapsed < BOOT_WAIT:
+        if clock.due(line) is None:
             return False
-        if line is not None or elapsed - lastCheck[0] < CHECK_INTERVAL:
-            return False
-        lastCheck[0] = elapsed
 
-        for ip in checkIps:
-            if checkPing and ip not in pingReported and _checkPing(ip):
-                pingReported.add(ip)
+        for kind, ip, port in _probeTargets(targets, seenPing, seenPorts, stopWhenWebUp=False):
+            if kind == "ping":
                 logger.info(f"Ping reachable: {ip}")
-
-            for port in portsToCheck:
-                if (ip, port) in reported:
-                    continue
-                ok = _checkHttp(ip, port) if port in (80, 443) else _checkTcp(ip, port)
-                if ok:
-                    reported.add((ip, port))
-                    if port in _WEB_PORTS:
-                        scheme = "https" if port in (443, 8443) else "http"
-                        suffix = f":{port}" if port not in (80, 443) else ""
-                        logger.info(f"Web UI up → {scheme}://{ip}{suffix}/")
-                    else:
-                        logger.info(f"Service up → {ip}:{port}/tcp")
+            elif kind == "web":
+                scheme = "https" if port in (443, 8443) else "http"
+                suffix = f":{port}" if port not in (80, 443) else ""
+                logger.info(f"Web UI up → {scheme}://{ip}{suffix}/")
+            else:
+                logger.info(f"Service up → {ip}:{port}/tcp")
 
         return False
 
     return onLine
 
 
+# ──────────────── Target resolution & probe scheduling ────────────────
+
+class _Targets(NamedTuple):
+    """What to probe during a run, derived from the classified network config."""
+    ips: list[str]      # loopback for user net, candidate IPs for TAP
+    ping: bool          # whether ICMP ping is meaningful (TAP only)
+    ports: list[int]    # TCP ports to probe, in priority order
+
+
+def _resolveTargets(networkResult: NetworkResult) -> Optional[_Targets]:
+    """Decide what to probe. None → nothing verifiable (user net with no ports,
+    or TAP with no candidate IPs)."""
+    tcpPorts = [port for port, proto in networkResult.ports if proto == "tcp" and port != 0]
+
+    if networkResult.isUserNetwork:
+        # User/SLIRP net is reached via forwarded loopback ports; ping is meaningless.
+        return _Targets(["127.0.0.1"], False, tcpPorts) if tcpPorts else None
+    if networkResult.candidates:
+        # TAP net: probe each candidate IP, web ports first, then the rest.
+        ips = [c[0] for c in networkResult.candidates]
+        ports = [80, 443] + [p for p in tcpPorts if p not in (80, 443)]
+        return _Targets(ips, True, ports)
+    return None
+
+
+class _CheckClock:
+    """Throttles the on_line callback to a fixed cadence: waits BOOT_WAIT after
+    each (re)start, then allows a check at most once per CHECK_INTERVAL, and only
+    on timer ticks (line is None) — never on log lines."""
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        """Restart the boot-wait/interval timing (once per QEMU attempt)."""
+        self._start = time.monotonic()
+        self._last = 0.0
+
+    @property
+    def elapsed(self) -> float:
+        return time.monotonic() - self._start
+
+    def due(self, line: str | None) -> Optional[float]:
+        """Elapsed seconds if a check should run now, else None."""
+        elapsed = self.elapsed
+        if elapsed < BOOT_WAIT or line is not None or elapsed - self._last < CHECK_INTERVAL:
+            return None
+        self._last = elapsed
+        return elapsed
+
+
+def _probeTargets(targets: _Targets, seenPing: set, seenPorts: set, stopWhenWebUp: bool):
+    """Probe every not-yet-seen target once, yielding (kind, ip, port) for each
+    newly reachable one — ("ping", ip, None) or ("web"|"tcp", ip, port) — and
+    recording it in seenPing/seenPorts. If stopWhenWebUp, stop after a web hit."""
+    webHit = False
+    for ip in targets.ips:
+        if targets.ping and ip not in seenPing and _checkPing(ip):
+            seenPing.add(ip)
+            yield ("ping", ip, None)
+
+        for port in targets.ports:
+            if (ip, port) in seenPorts:
+                continue
+            if _checkService(ip, port):
+                seenPorts.add((ip, port))
+                kind = "web" if _isWebPort(port) else "tcp"
+                webHit = webHit or kind == "web"
+                yield (kind, ip, port)
+
+        if stopWhenWebUp and webHit:
+            return
+
+
+# ─────────────────────────── Low-level probes ─────────────────────────
+
+def _isWebPort(port: int) -> bool:
+    return port in _WEB_PORTS
+
+
+def _checkService(ip: str, port: int) -> bool:
+    """Probe a port with the right method: HTTP for web ports, raw TCP otherwise."""
+    return _checkHttp(ip, port) if _isWebPort(port) else _checkTcp(ip, port)
+
+
 def _checkHttp(ip: str, port: int) -> bool:
     """Probe an HTTP/HTTPS port for a live web server.
 
-    A parseable response (including 4xx/5xx) counts as up. Many embedded
-    servers emit malformed HTTP that urllib can't parse (bad status line, early
-    disconnect, non-HTTP banner) — those would otherwise read as "down" even
-    though the device is serving, which is a big source of false negatives vs
-    FirmAE. So when urllib fails for any non-HTTP reason, fall back to a raw
-    request and accept *any* response bytes as proof of life.
+    A parseable response (including 4xx/5xx) counts as up. Many embedded servers
+    emit malformed HTTP urllib can't parse (bad status line, early disconnect,
+    non-HTTP banner) — a big source of false negatives vs FirmAE. So on any
+    non-HTTP failure, fall back to a raw probe and accept any bytes as proof of life.
     """
-    scheme = "https" if port == 443 else "http"
+    https = port in (443, 8443)
+    scheme = "https" if https else "http"
     try:
         urllib.request.urlopen(
             f"{scheme}://{ip}:{port}/",
             timeout=HTTP_TIMEOUT,
-            context=_SSL_CTX if port == 443 else None,
+            context=_SSL_CTX if https else None,
         )
         return True
     except urllib.error.HTTPError:
@@ -209,15 +268,14 @@ def _checkHttp(ip: str, port: int) -> bool:
 
 
 def _httpRawProbe(ip: str, port: int) -> bool:
-    """Send a minimal GET over a raw socket; return True if the server replies
-    with any bytes. Distinguishes a live-but-quirky server (responds with
-    garbage) from a closed/refused port (no connection, or no data)."""
+    """Send a minimal GET over a raw socket; True if the server replies with any
+    bytes. Distinguishes a live-but-quirky server from a closed/refused port."""
     try:
         sock = socket.create_connection((ip, port), timeout=HTTP_TIMEOUT)
     except OSError:
         return False   # port closed / refused / unreachable
     try:
-        if port == 443:
+        if port in (443, 8443):
             sock = _SSL_CTX.wrap_socket(sock, server_hostname=ip)
         sock.settimeout(HTTP_TIMEOUT)
         sock.sendall(b"GET / HTTP/1.0\r\nHost: " + ip.encode() +
@@ -245,7 +303,7 @@ def _checkPing(ip: str) -> bool:
 
 
 def _checkTcp(ip: str, port: int) -> bool:
-    """Attempt a TCP connection. Returns True if the port accepts the connection."""
+    """Attempt a TCP connection. True if the port accepts it."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(2.0)
