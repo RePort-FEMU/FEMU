@@ -331,7 +331,7 @@ class PreEmulator:
 
             # --- verify reachability (mirrors check_emulation.sh) ---
             reachable, checks = verifyEmulation(
-                initArg, networkResult, self.workDir, self.qemu.run)
+                initArg, networkResult, self.workDir, self.qemu.run, init=init)
             self._restoreBackupIfNeeded()
 
             result = ProbeResult(initArg, networkResult, injectedFile, injectedContent,

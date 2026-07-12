@@ -37,6 +37,7 @@ def verifyEmulation(
     networkResult: NetworkResult,
     workDir: str,
     runQemu: Callable,
+    init: str = "",
 ) -> tuple[bool, list[ServiceCheck]]:
     """
     Boot the emulated device and verify reachability. Returns (reachable, checks):
@@ -50,7 +51,10 @@ def verifyEmulation(
     QEMU stops as soon as a web service responds; otherwise it runs the full
     verify window so late-starting services still get recorded.
     """
-    verifyLog = os.path.join(workDir, "kernelLogs", "qemu.verify.serial.log")
+    # Name the verify log per-init (matching the probe convention) so verify logs
+    # for different inits don't overwrite each other.
+    verifyName = f"qemu.verify.{init[1:].replace('/', '-')}.serial.log" if init else "qemu.verify.serial.log"
+    verifyLog = os.path.join(workDir, "kernelLogs", verifyName)
 
     targets = _resolveTargets(networkResult)
     if targets is None:
