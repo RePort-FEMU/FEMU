@@ -40,14 +40,53 @@ def initFirmadyne(rootPath: str) -> None:
         os.mkdir(os.path.join(rootPath, "firmadyne"))
         os.mkdir(os.path.join(rootPath, "firmadyne", "libnvram"))
         os.mkdir(os.path.join(rootPath, "firmadyne", "libnvram.override"))
-        with open(os.path.join(rootPath, "firmadyne", "network_type"), "w") as f:
-            f.write("None")
     except OSError as e:
         logger.error(f"Failed to create directories: {e}")
         raise RuntimeError(f"Failed to create directories: {e}")  
     logger.info("Firmadyne initialized successfully.")  
     
     
+def orderInits(rootPath: str, inits: list[str]) -> list[str]:
+    """Order candidate inits so the ones most likely to boot the firmware's real
+    services (→ web-reachable) are tried first, cutting time wasted on cold-boot
+    fallbacks that run the full probe/verify timeout without ever coming up.
+
+    Heuristic score (higher = tried earlier):
+      +5  shell script (starts with `#!`) — runs the firmware's own rcS/service
+          startup, the surest path to a reachable device.
+      +3  canonical init-script name (rcS / preinit / preinitMT / rc).
+      +1  lives under /etc (where real init scripts usually are).
+      -3  bare /init or /sbin/init that is NOT a script — almost always a busybox
+          symlink that cold-boots without the firmware's services.
+
+    Stable: equal scores keep their original discovery order. `/firmadyne/preInit.sh`
+    is appended by the caller afterwards, so it always remains the last resort.
+    """
+    def score(init: str) -> int:
+        s = 0
+        isScript = False
+        try:
+            with open(guestToHostPath(rootPath, init), "rb") as f:
+                isScript = f.read(2) == b"#!"
+        except OSError:
+            # Unreadable/dangling symlink/binary → treat as non-script.
+            pass
+        if isScript:
+            s += 5
+        if os.path.basename(init) in ("rcS", "preinit", "preinitMT", "rc"):
+            s += 3
+        if init.startswith("/etc"):
+            s += 1
+        if not isScript and init in ("/init", "/sbin/init"):
+            s -= 3
+        return s
+
+    ordered = sorted(inits, key=score, reverse=True)
+    if ordered != inits:
+        logger.info(f"Reordered inits by boot-likelihood: {ordered}")
+    return ordered
+
+
 def validateInits(rootPath: str, suspectedInits: list[str]) -> list[str]:
     """
     Checks if the suspected init commands exist in the image and creates a list of valid init commands.
@@ -149,7 +188,9 @@ def validateInits(rootPath: str, suspectedInits: list[str]) -> list[str]:
             
     if len(foundInits) == 0:
         logger.warning("No init commands found in the image. Using default preInit.sh.")
-    
+
+    foundInits = orderInits(rootPath, foundInits)
+
     foundInits.append("/firmadyne/preInit.sh")
     with open(initListFile, "w") as f:
         for init in foundInits:
