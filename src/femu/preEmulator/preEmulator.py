@@ -246,17 +246,6 @@ class PreEmulator:
             logger.debug(f"Restored original init: {self.backupFile}")
         self.backupFile = None
         self.backupData = None
-        
-    def _restoreImage(self) -> None:
-        """Restore the image to a known clean state."""
-        self._restoreBackupIfNeeded()
-        
-        self._writeNetworkFiles({
-            "network_type":  "None",
-            "net_bridge":    "",
-            "net_interface": "",
-        })
-        
 
     def start(self) -> Optional[ProbeResult]:
         """
@@ -293,6 +282,14 @@ class PreEmulator:
                 self.workDir, "kernelLogs",
                 f"qemu.{init[1:].replace('/', '-')}.serial.log",
             )
+
+            # --- probe: network.sh reads "None" and does nothing ---
+            self._writeNetworkFiles({
+                "network_type":  "None",
+                "net_bridge":    "",
+                "net_interface": "",
+            })
+
             logger.info(f"Running probe QEMU with initarg: {initArg}")
             # Retry on a BUSY/spin freeze (a race — a fresh boot often clears it).
             # Non-final attempts stop early on a freeze; the last attempt lets the
@@ -335,7 +332,7 @@ class PreEmulator:
             # --- verify reachability (mirrors check_emulation.sh) ---
             reachable, checks = verifyEmulation(
                 initArg, networkResult, self.workDir, self.qemu.run)
-            self._restoreImage()
+            self._restoreBackupIfNeeded()
 
             result = ProbeResult(initArg, networkResult, injectedFile, injectedContent,
                                  reachable=reachable, checks=checks)
