@@ -19,6 +19,21 @@ def getExportDir(workDir: str, tag: str) -> str:
     return path
 
 
+def _reachabilityFlags(reach: dict) -> tuple[bool, bool]:
+    """Return (pingReachable, serviceReachable) from a reachability block,
+    tolerating both the current and legacy findings formats.
+
+    Current: {"reachable", "webReachable", "checks":[{kind,reachable,...}]}.
+    Legacy:  {"ping": bool, "service": bool}.
+    ``serviceReachable`` tracks web reachability, matching the pre-change meaning.
+    """
+    checks = reach.get("checks")
+    if checks is not None:
+        ping = any(c.get("reachable") and c.get("kind") == "ping" for c in checks)
+        return ping, bool(reach.get("webReachable"))
+    return bool(reach.get("ping", False)), bool(reach.get("service", False))
+
+
 # ---------------------------------------------------------------------------
 # Findings — accumulate state, then build/export at any point
 # ---------------------------------------------------------------------------
@@ -153,6 +168,7 @@ class Findings:
         net = findings.get("network")
         stage = findings.get("stage", "unknown")
         reach = (net or {}).get("reachability", {})
+        pingReachable, serviceReachable = _reachabilityFlags(reach)
 
         try:
             with DBInterface(self.sqlIP, self.sqlPort) as cur:
@@ -179,8 +195,8 @@ class Findings:
                     net.get("netInterface")  if net else None,
                     net.get("isUserNetwork") if net else None,
                     findings.get("emulation", {}).get("initArg"),
-                    reach.get("ping",    False),
-                    reach.get("service", False),
+                    pingReachable,
+                    serviceReachable,
                 ))
                 row = cur.fetchone()
                 if not row:
