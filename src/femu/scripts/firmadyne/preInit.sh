@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/firmadyne/sh
 
 BUSYBOX=/firmadyne/busybox
 
