@@ -143,14 +143,14 @@ class PreEmulator:
                 self.backupFile = init
                 self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
                 injection = self._scriptInitInjection(guestToHostPath(self.mountPoint, init))
-                initArg = f"init={init}"
+                initArg = "rdinit=/firmadyne/preInit.sh"
             elif "ELF" in initType or "symbolic link" in initType: # binary/symlinked native init (e.g. /sbin/init -> rc or -> busybox)
                 self.backupFile = "/firmadyne/preInit.sh"
                 self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
                 injection = self._nativeInitInjection(guestToHostPath(self.mountPoint, self.backupFile), init)
                 initArg = "init=/firmadyne/preInit.sh"
 
-        # FIRMAE diff: Firmae only used init= for binaries. We use it for everything
+        # FIRMAE diff: script inits are cold-launched via rdinit=/firmadyne/preInit.sh (old behavior)
         return initArg, injection
 
     def getKernelPath(self) -> str:
