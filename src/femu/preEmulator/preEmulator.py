@@ -101,19 +101,19 @@ class PreEmulator:
         return lines
 
     def _preInitInjection(self, filePath: str) -> str:
-        """Cold-launch fallback (init=/firmadyne/preInit.sh): append helpers + run_service.sh, then idle."""
+        """Cold-launch fallback (rdinit=/firmadyne/preInit.sh): append helpers + run_service.sh, then idle."""
         injection = ("\n# Injected by PreEmulator\n"
                      + self.injectedHelpers()
                      + "/firmadyne/busybox sleep 36000\n")
         return injectFile(filePath, after=injection)
 
     def _scriptInitInjection(self, filePath: str) -> str:
-        """Script init: run preInit.sh + helpers, then the original script, then idle."""
-        before = ("#!/bin/sh\n\n# Injected by PreEmulator\n/firmadyne/preInit.sh\n"
-                  + self.injectedHelpers()
-                  + "\n# End of injection\n")
-        after = "\n# Post-injection content\n\n/firmadyne/busybox sleep 36000\n"
-        return injectFile(filePath, before=before, after=after)
+        """Script init: append the firmadyne helpers to the end of the original
+        script (original append style; preInit.sh is cold-launched via rdinit)."""
+        injection = ("\n# Injected by PreEmulator\n"
+                     + self.injectedHelpers()
+                     + "/firmadyne/busybox sleep 36000\n")
+        return injectFile(filePath, after=injection)
     
     def _nativeInitInjection(self, filePath: str, init: str) -> str:
         """Binary init: setup network and hand over PID 1 to the init."""
@@ -136,7 +136,7 @@ class PreEmulator:
             self.backupFile = init
             self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
             injection = self._preInitInjection(guestToHostPath(self.mountPoint, init))
-            initArg = f"init={init}"
+            initArg = "rdinit=/firmadyne/preInit.sh"
         else:
             # TODO: improve script detection
             if "ELF" not in initType and "symbolic link" not in initType: # script init
@@ -150,7 +150,8 @@ class PreEmulator:
                 injection = self._nativeInitInjection(guestToHostPath(self.mountPoint, self.backupFile), init)
                 initArg = "init=/firmadyne/preInit.sh"
 
-        # FIRMAE diff: script inits are cold-launched via rdinit=/firmadyne/preInit.sh (old behavior)
+        # FIRMAE diff: script inits (script + preInit fallback) boot via rdinit=/firmadyne/preInit.sh;
+        # only native/ELF inits keep init=/firmadyne/preInit.sh (old behavior)
         return initArg, injection
 
     def getKernelPath(self) -> str:
