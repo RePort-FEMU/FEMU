@@ -512,6 +512,52 @@ def addNvramEntries(rootPath: str) -> None:
     
     logger.info(f"Added {len(entries)} NVRAM entries to {nvram_override_dir}.")
 
+def repairEmptyApplets(rootPath: str) -> None:
+    """
+    Relink empty binaries in the standard bin directories back to busybox.
+
+    Firmware commonly ships applets as symlinks to busybox (e.g.
+    /usr/bin/expr -> ../../bin/busybox). Some extractors flatten these
+    cross-directory symlinks into 0-byte regular files, so the applet becomes a
+    no-op and any script that calls it (expr, ifconfig, wc, mknod, ...) breaks.
+    Point every empty file in the bin directories back at busybox to restore it.
+
+    Args:
+        rootPath (str): Path to the Firmadyne root directory.
+    """
+    # Prefer the firmware's own busybox (matches the applet set the firmware
+    # expects); fall back to the firmadyne one.
+    if existsInGuest(rootPath, "/bin/busybox"):
+        busyboxTarget = "/bin/busybox"
+    elif existsInGuest(rootPath, "/firmadyne/busybox"):
+        busyboxTarget = "/firmadyne/busybox"
+    else:
+        logger.warning("No busybox found; cannot relink empty applets")
+        return
+
+    repaired = 0
+    for binDir in ("/bin", "/usr/bin", "/sbin", "/usr/sbin"):
+        hostDir = readGuestLink(guestToHostPath(rootPath, binDir), rootPath)
+        if not os.path.isdir(hostDir):
+            continue
+        for name in os.listdir(hostDir):
+            hostPath = os.path.join(hostDir, name)
+            # Only plain, empty, non-symlink files (a flattened applet link).
+            if os.path.islink(hostPath) or not os.path.isfile(hostPath):
+                continue
+            if os.path.getsize(hostPath) != 0:
+                continue
+            try:
+                os.remove(hostPath)
+                os.symlink(busyboxTarget, hostPath)
+                repaired += 1
+                logger.debug(f"Relinked empty applet {binDir}/{name} -> {busyboxTarget}")
+            except OSError as e:
+                logger.warning(f"Failed to relink empty applet {hostPath}: {e}")
+    if repaired:
+        logger.info(f"Relinked {repaired} empty binary/binaries -> {busyboxTarget}")
+
+
 def fixFileSystem(rootPath: str) -> None:
     logger.info("Fixing file system...")
 
@@ -563,6 +609,11 @@ def fixFileSystem(rootPath: str) -> None:
             logger.debug(f"Fixed permissions on directory: {dirPath}")
         else:
             logger.warning(f"Directory {dirPath} does not exist, skipping permission fix.")
+
+    # Restore applet symlinks the extractor flattened into empty files.
+    # FIRMAE diff: this is a workaround for broken firmwares that ship with empty binaries instead of symlinks to busybox.
+    # DIR503 family
+    repairEmptyApplets(rootPath)
 
    # Create directories referenced by binaries in the image
     try:
