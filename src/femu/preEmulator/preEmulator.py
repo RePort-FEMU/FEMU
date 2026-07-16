@@ -119,8 +119,8 @@ class PreEmulator:
         """Binary init: setup network and hand over PID 1 to the init."""
         # Many Linksys devices require init to have PID 1 to work
         injection = ("\n# Injected by PreEmulator\n"
-                     + self.injectedHelpers(withService=False) # Dont force the service up as it may break init
-                     + f"exec {init}\n")
+                     + f"{init} &\n"
+                     + self.injectedHelpers())
         return injectFile(filePath, after=injection)
 
     def injectInit(self, init: str) -> tuple[str, str]:
