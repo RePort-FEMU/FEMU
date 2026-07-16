@@ -120,7 +120,8 @@ class PreEmulator:
         # Many Linksys devices require init to have PID 1 to work
         injection = ("\n# Injected by PreEmulator\n"
                      + f"{init} &\n"
-                     + self.injectedHelpers())
+                     + self.injectedHelpers()
+                     + "/firmadyne/busybox sleep 36000\n")
         return injectFile(filePath, after=injection)
 
     def injectInit(self, init: str) -> tuple[str, str]:
