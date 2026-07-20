@@ -369,7 +369,6 @@ class Emulator:
         pre = PreEmulator(
             os.path.join(self.getWorkDir(), "raw.img"),
             foundInits,
-            len(foundServices) > 0,
             self.architecture,
             self.endianess,
             self.kernelVersion,

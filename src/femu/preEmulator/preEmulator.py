@@ -60,8 +60,8 @@ def injectFile(filePath: str, before: str = "", after: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 class PreEmulator:
-    def __init__(self, imagePath: str, possibleInits: list[str], servicesFound: bool,
-                 arch: Architecture, endiannes: Endianess,  kernelVersion: str, 
+    def __init__(self, imagePath: str, possibleInits: list[str],
+                 arch: Architecture, endiannes: Endianess,  kernelVersion: str,
                  kernelsPath: str, mountPoint: str = "", workDir: str = ""):
 
         self.imagePath = imagePath
@@ -69,7 +69,6 @@ class PreEmulator:
         self.architecture = arch
         self.endiannes = endiannes
         self.kernelVersion = kernelVersion
-        self.servicesFound = servicesFound
         self.kernelsPath = kernelsPath
         
         if len(self.possibleInits) == 0:
@@ -95,7 +94,9 @@ class PreEmulator:
     def injectedHelpers(self, withService: bool = True) -> str:
         """Background helper launches shared by the injection variants."""
         lines = "/firmadyne/network.sh &\n"
-        if withService and self.servicesFound:
+        if withService:
+            # run_service.sh self-detects a missing /firmadyne/service and exits,
+            # so it is safe to inject unconditionally.
             lines += "/firmadyne/run_service.sh &\n"
         lines += "/firmadyne/debug.sh &\n"
         return lines
