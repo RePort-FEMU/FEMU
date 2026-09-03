@@ -4,6 +4,7 @@ import hashlib
 import tarfile
 import shutil
 import string
+import time
 import os
 import re
 
@@ -16,6 +17,8 @@ from .dbInterface import DBInterface
 logger = logging.getLogger(__name__)
 
 _PARTITION_OFFSET = 1048576  # 1 MiB — matches the sfdisk default
+_UMOUNT_RETRIES = 3
+_UMOUNT_RETRY_DELAY = 1  # seconds
 
 def checkCompatibility(arch: Architecture, endianess: Endianess) -> bool:
     """
@@ -587,9 +590,18 @@ def unmountImage(mountPoint: str) -> None:
     if not loopDevice:
         raise RuntimeError(f"No loop device found for mount point {mountPoint}")
     
-    # Unmount the mount point
-    runAsRoot(["umount", mountPoint])
-    
+    # Unmount the mount point, retrying on a transient "target is busy" (e.g. a
+    # file indexer or delayed writeback briefly holding the mount after we write to it).
+    for attempt in range(_UMOUNT_RETRIES):
+        try:
+            runAsRoot(["umount", mountPoint])
+            break
+        except RuntimeError as e:
+            if "busy" not in str(e).lower() or attempt == _UMOUNT_RETRIES - 1:
+                raise
+            logger.warning(f"umount of {mountPoint} busy, retrying ({attempt + 1}/{_UMOUNT_RETRIES})...")
+            time.sleep(_UMOUNT_RETRY_DELAY)
+
     removePartition(loopDevice)
     
 @contextmanager
