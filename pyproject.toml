@@ -17,7 +17,7 @@ dependencies = [
 Repository = "https://github.com/RePort-FEMU/FEMU"
 
 [project.scripts]
-femu = "femu.main:main"
+femu = "femu.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
