@@ -135,19 +135,22 @@ class PreEmulator:
 
         if os.path.basename(init) == "preInit.sh":
             self.backupFile = init
-            self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
+            with open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace") as f:
+                self.backupData = f.read()
             injection = self._preInitInjection(guestToHostPath(self.mountPoint, init))
             initArg = f"init={init}"
         else:
             # TODO: improve script detection
             if "ELF" not in initType and "symbolic link" not in initType: # script init
                 self.backupFile = init
-                self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
+                with open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace") as f:
+                    self.backupData = f.read()
                 injection = self._scriptInitInjection(guestToHostPath(self.mountPoint, init))
                 initArg = f"init={init}"
             elif "ELF" in initType or "symbolic link" in initType: # binary/symlinked native init (e.g. /sbin/init -> rc or -> busybox)
                 self.backupFile = "/firmadyne/preInit.sh"
-                self.backupData = open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace").read()
+                with open(guestToHostPath(self.mountPoint, self.backupFile), "r", errors="replace") as f:
+                    self.backupData = f.read()
                 injection = self._nativeInitInjection(guestToHostPath(self.mountPoint, self.backupFile), init)
                 initArg = "init=/firmadyne/preInit.sh"
 
